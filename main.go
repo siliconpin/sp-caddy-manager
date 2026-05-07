@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,10 +34,34 @@ func main() {
 	caddyConfigDir = getCaddyConfigDir()
 	caddyAPIURL = getCaddyAPIURL()
 
-	var err error
-	db, err = sql.Open("sqlite3", getDBPath())
+	// Check if caddy command is available
+	cmd := exec.Command("which", "caddy")
+	out, err := cmd.Output()
 	if err != nil {
-		log.Fatal(err)
+		log.Println("WARNING: caddy command not found in PATH")
+	} else {
+		log.Printf("INFO: caddy command is available at: %s", strings.TrimSpace(string(out)))
+	}
+
+	// Create caddy config directory
+	if err := os.MkdirAll(caddyConfigDir, 0744); err != nil {
+		log.Fatalf("Failed to create caddy config directory: %v", err)
+	}
+	log.Printf("INFO: Caddy config directory ensured: %s", caddyConfigDir)
+
+	// Create empty.caddy file if it doesn't exist
+	emptyFileName := filepath.Join(caddyConfigDir, "empty.caddy")
+	if _, err := os.Stat(emptyFileName); os.IsNotExist(err) {
+		if err := os.WriteFile(emptyFileName, []byte(""), 0744); err != nil {
+			log.Fatalf("Failed to create empty.caddy file: %v", err)
+		}
+		log.Printf("INFO: Created empty.caddy file at %s", emptyFileName)
+	}
+
+	var dbErr error
+	db, dbErr = sql.Open("sqlite3", getDBPath())
+	if dbErr != nil {
+		log.Fatal(dbErr)
 	}
 	defer db.Close()
 
