@@ -27,6 +27,9 @@ esac
 
 if command -v "${APP_NAME}" &> /dev/null; then
     echo "Binary ${APP_NAME} found. Skipping download..."
+    BINARY_PATH=$(command -v "${APP_NAME}")
+    sudo cp "${BINARY_PATH}" "${INSTALL_DIR}/${APP_NAME}"
+    sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
 else
     echo "Downloading ${BINARY_NAME}..."
     curl -L "${BASE_URL}/${BINARY_NAME}" -o "/tmp/${APP_NAME}"
