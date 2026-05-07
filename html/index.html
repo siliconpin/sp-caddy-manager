@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SP Caddy Manager</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f4f7fb; color: #202124; }
+    header { background: #1f2937; color: #fff; padding: 20px; }
+    main { padding: 20px; max-width: 980px; margin: 0 auto; }
+    section { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px; margin-bottom: 20px; }
+    h1, h2 { margin-top: 0; }
+    form { display: grid; gap: 12px; }
+    input, button { font-size: 15px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+    button { background: #2563eb; color: #fff; cursor: pointer; border: none; }
+    button:hover { background: #1d4ed8; }
+    .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+    .status { font-family: monospace; white-space: pre-wrap; background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #cbd5e1; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e2e8f0; }
+    th { background: #eff6ff; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SP Caddy Manager</h1>
+    <p>Use this UI to test APIs and view domains/ports stored in SQLite.</p>
+  </header>
+  <main>
+    <section>
+      <h2>Health / Version</h2>
+      <div class="grid">
+        <div>
+          <button id="healthButton">Check Health</button>
+          <div id="healthResult" class="status">...</div>
+        </div>
+        <div>
+          <button id="versionButton">Get Version</button>
+          <div id="versionResult" class="status">...</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Add Domain</h2>
+      <form id="addForm">
+        <label>
+          Domain
+          <input type="text" id="addDomain" placeholder="example.com" required />
+        </label>
+        <label>
+          Port
+          <input type="number" id="addPort" placeholder="8080" required />
+        </label>
+        <button type="submit">Add Domain</button>
+      </form>
+      <div id="addResult" class="status">Ready to add.</div>
+    </section>
+
+    <section>
+      <h2>Delete Domain</h2>
+      <form id="deleteForm">
+        <label>
+          Domain
+          <input type="text" id="deleteDomain" placeholder="example.com" required />
+        </label>
+        <button type="submit">Delete Domain</button>
+      </form>
+      <div id="deleteResult" class="status">Ready to delete.</div>
+    </section>
+
+    <section>
+      <h2>Used Ports</h2>
+      <button id="refreshDomains">Refresh list</button>
+      <div id="domainsList" class="status">Loading...</div>
+    </section>
+  </main>
+
+  <script>
+    const healthButton = document.getElementById('healthButton');
+    const versionButton = document.getElementById('versionButton');
+    const healthResult = document.getElementById('healthResult');
+    const versionResult = document.getElementById('versionResult');
+    const addForm = document.getElementById('addForm');
+    const deleteForm = document.getElementById('deleteForm');
+    const addResult = document.getElementById('addResult');
+    const deleteResult = document.getElementById('deleteResult');
+    const refreshButton = document.getElementById('refreshDomains');
+    const domainsList = document.getElementById('domainsList');
+
+    const show = (el, text) => { el.textContent = text; };
+    const request = async (path, method = 'GET', body = null) => {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opts.body = JSON.stringify(body);
+      const resp = await fetch(path, opts);
+      const text = await resp.text();
+      return { ok: resp.ok, status: resp.status, text };
+    };
+
+    const refreshDomains = async () => {
+      domainsList.textContent = 'Loading...';
+      try {
+        const resp = await fetch('/api/domains');
+        if (!resp.ok) throw new Error('Failed to load domains');
+        const data = await resp.json();
+        if (!data.length) {
+          domainsList.textContent = 'No domains registered yet.';
+          return;
+        }
+        const rows = data.map(item => `<tr><td>${item.domain}</td><td>${item.port}</td></tr>`).join('');
+        domainsList.innerHTML = `<table><thead><tr><th>Domain</th><th>Port</th></tr></thead><tbody>${rows}</tbody></table>`;
+      } catch (err) {
+        domainsList.textContent = err.message;
+      }
+    };
+
+    healthButton.addEventListener('click', async () => {
+      const resp = await request('/health');
+      show(healthResult, resp.ok ? resp.text : `ERROR ${resp.status}: ${resp.text}`);
+    });
+
+    versionButton.addEventListener('click', async () => {
+      const resp = await request('/version');
+      show(versionResult, resp.ok ? resp.text : `ERROR ${resp.status}: ${resp.text}`);
+    });
+
+    addForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const domain = document.getElementById('addDomain').value.trim();
+      const port = Number(document.getElementById('addPort').value.trim());
+      if (!domain || !port) {
+        show(addResult, 'Domain and port are required.');
+        return;
+      }
+      const resp = await request('/add-domain', 'POST', { domain, port });
+      show(addResult, resp.ok ? resp.text : `ERROR ${resp.status}: ${resp.text}`);
+      if (resp.ok) refreshDomains();
+    });
+
+    deleteForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const domain = document.getElementById('deleteDomain').value.trim();
+      if (!domain) {
+        show(deleteResult, 'Domain is required.');
+        return;
+      }
+      const resp = await request('/delete-domain', 'POST', { domain });
+      show(deleteResult, resp.ok ? resp.text : `ERROR ${resp.status}: ${resp.text}`);
+      if (resp.ok) refreshDomains();
+    });
+
+    refreshButton.addEventListener('click', refreshDomains);
+    window.addEventListener('load', refreshDomains);
+  </script>
+</body>
+</html>

@@ -1,1 +1,11 @@
 sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/sp-caddy-manager
+
+/etc/caddy/Caddyfile
+import /etc/caddy/conf.d/*.caddy
+
+ensure at least one .caddy file exists (even an empty one)
+
+
+caddy validate --config /etc/caddy/Caddyfile
+
+caddy reload or service caddy restart ...

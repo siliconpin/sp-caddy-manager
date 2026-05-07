@@ -45,8 +45,10 @@ func main() {
 
 	http.HandleFunc("/add-domain", handleAddDomain)
 	http.HandleFunc("/delete-domain", handleDeleteDomain)
+	http.HandleFunc("/api/domains", handleListDomains)
 	http.HandleFunc("/version", handleVersion)
 	http.HandleFunc("/health", handleHealth)
+	http.Handle("/", http.FileServer(http.Dir("./html")))
 	fmt.Printf("Server starting on :%d...\n", port)
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
 }
@@ -252,6 +254,38 @@ func handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Domain %s deleted successfully", req.Domain)
+}
+
+func handleListDomains(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	rows, err := db.Query("SELECT domain, port FROM domains ORDER BY domain")
+	if err != nil {
+		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type domainEntry struct {
+		Domain string `json:"domain"`
+		Port   int    `json:"port"`
+	}
+
+	var entries []domainEntry
+	for rows.Next() {
+		var e domainEntry
+		if err := rows.Scan(&e.Domain, &e.Port); err != nil {
+			http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		entries = append(entries, e)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
 }
 
 func handleVersion(w http.ResponseWriter, r *http.Request) {
