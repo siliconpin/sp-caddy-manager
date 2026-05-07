@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -21,8 +23,12 @@ type DomainRequest struct {
 }
 
 func main() {
+	loadDotEnv(".env")
+
+	port := getPortFromEnv()
+
 	var err error
-	db, err = sql.Open("sqlite3", "./domains.db")
+	db, err = sql.Open("sqlite3", "./domains.sqlite")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -41,8 +47,47 @@ func main() {
 	http.HandleFunc("/delete-domain", handleDeleteDomain)
 	http.HandleFunc("/version", handleVersion)
 	http.HandleFunc("/health", handleHealth)
-	fmt.Println("Server starting on :3000...")
-	http.ListenAndServe(":3000", nil)
+	fmt.Printf("Server starting on :%d...\n", port)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
+}
+
+func loadDotEnv(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key == "" {
+			continue
+		}
+
+		os.Setenv(key, strings.Trim(value, `"`))
+	}
+}
+
+func getPortFromEnv() int {
+	portStr := os.Getenv("PORT")
+	if portStr == "" {
+		return 3000
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		log.Fatalf("invalid PORT value %q: %v", portStr, err)
+	}
+	return port
 }
 
 func handleAddDomain(w http.ResponseWriter, r *http.Request) {
