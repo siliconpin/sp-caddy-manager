@@ -25,12 +25,15 @@ case "$ARCH" in
         ;;
 esac
 
-echo "Downloading ${BINARY_NAME}..."
-curl -L "${BASE_URL}/${BINARY_NAME}" -o "/tmp/${APP_NAME}"
-
-echo "Installing binary to ${INSTALL_DIR}..."
-sudo mv "/tmp/${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
-sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+if command -v "${APP_NAME}" &> /dev/null; then
+    echo "Binary ${APP_NAME} found. Skipping download..."
+else
+    echo "Downloading ${BINARY_NAME}..."
+    curl -L "${BASE_URL}/${BINARY_NAME}" -o "/tmp/${APP_NAME}"
+    echo "Installing binary to ${INSTALL_DIR}..."
+    sudo mv "/tmp/${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
+    sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+fi
 
 echo "Creating systemd service..."
 sudo bash -c "cat > ${SERVICE_FILE}" <<EOF
