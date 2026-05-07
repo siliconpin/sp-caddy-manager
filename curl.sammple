@@ -1,0 +1,4 @@
+curl -X POST http://localhost:3000/add-domain \
+     -H "Content-Type: application/json" \
+     -d '{"domain":"sub-domain1.siliconpin.com", "port":8000}'
+
