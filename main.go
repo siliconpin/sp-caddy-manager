@@ -15,7 +15,11 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var db *sql.DB
+var (
+	db             *sql.DB
+	caddyConfigDir = "/etc/caddy/conf.d"
+	caddyAPIURL    = "http://localhost:2019/config/apps/http/servers/srv0/routes"
+)
 
 type DomainRequest struct {
 	Domain string `json:"domain"`
@@ -26,9 +30,11 @@ func main() {
 	loadDotEnv(".env")
 
 	port := getPortFromEnv()
+	caddyConfigDir = getCaddyConfigDir()
+	caddyAPIURL = getCaddyAPIURL()
 
 	var err error
-	db, err = sql.Open("sqlite3", "./domains.sqlite")
+	db, err = sql.Open("sqlite3", getDBPath())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -43,14 +49,39 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.HandleFunc("/add-domain", handleAddDomain)
-	http.HandleFunc("/delete-domain", handleDeleteDomain)
-	http.HandleFunc("/api/domains", handleListDomains)
-	http.HandleFunc("/version", handleVersion)
-	http.HandleFunc("/health", handleHealth)
-	http.Handle("/", http.FileServer(http.Dir("./html")))
 	fmt.Printf("Server starting on :%d...\n", port)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), newRouter()))
+}
+
+func newRouter() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/add-domain", handleAddDomain)
+	mux.HandleFunc("/delete-domain", handleDeleteDomain)
+	mux.HandleFunc("/api/domains", handleListDomains)
+	mux.HandleFunc("/version", handleVersion)
+	mux.HandleFunc("/health", handleHealth)
+	mux.Handle("/", http.FileServer(http.Dir("./html")))
+	return mux
+}
+
+func getEnvDefault(key, def string) string {
+	val := os.Getenv(key)
+	if val == "" {
+		return def
+	}
+	return val
+}
+
+func getDBPath() string {
+	return getEnvDefault("DB_PATH", "./domains.sqlite")
+}
+
+func getCaddyConfigDir() string {
+	return getEnvDefault("CADDY_CONFIG_DIR", "/etc/caddy/conf.d")
+}
+
+func getCaddyAPIURL() string {
+	return getEnvDefault("CADDY_API_URL", "http://localhost:2019/config/apps/http/servers/srv0/routes")
 }
 
 func loadDotEnv(path string) {
@@ -106,7 +137,7 @@ func handleAddDomain(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Create the Caddyfile snippet for persistence
 	caddyfileContent := fmt.Sprintf("%s {\n\treverse_proxy localhost:%d\n}\n", req.Domain, req.Port)
-	filePath := filepath.Join("/etc/caddy/conf.d", req.Domain+".caddy")
+	filePath := filepath.Join(caddyConfigDir, req.Domain+".caddy")
 	
 	if err := os.WriteFile(filePath, []byte(caddyfileContent), 0644); err != nil {
 		http.Error(w, "Failed to save file: "+err.Error(), http.StatusInternalServerError)
@@ -131,10 +162,7 @@ func handleAddDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonPayload, _ := json.Marshal(caddyRoute)
-	// Path assumes standard Caddy structure: apps -> http -> servers -> srv0 -> routes
-	apiURL := "http://localhost:2019/config/apps/http/servers/srv0/routes"
-	
-	resp, err := http.Post(apiURL, "application/json", bytes.NewBuffer(jsonPayload))
+	resp, err := http.Post(caddyAPIURL, "application/json", bytes.NewBuffer(jsonPayload))
 	if err != nil || resp.StatusCode >= 400 {
 		http.Error(w, "Caddy API update failed", http.StatusInternalServerError)
 		return
@@ -177,7 +205,7 @@ func handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove the file
-	filePath := filepath.Join("/etc/caddy/conf.d", req.Domain+".caddy")
+	filePath := filepath.Join(caddyConfigDir, req.Domain+".caddy")
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 		http.Error(w, "Failed to remove file: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -192,7 +220,7 @@ func handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 
 	// Remove from Caddy config
 	// First, get current routes
-	resp, err := http.Get("http://localhost:2019/config/apps/http/servers/srv0/routes")
+	resp, err := http.Get(caddyAPIURL)
 	if err != nil {
 		http.Error(w, "Failed to get Caddy config: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -240,7 +268,7 @@ func handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 
 	// PUT the updated routes
 	jsonPayload, _ := json.Marshal(newRoutes)
-	req2, err := http.NewRequest("PUT", "http://localhost:2019/config/apps/http/servers/srv0/routes", bytes.NewBuffer(jsonPayload))
+	req2, err := http.NewRequest("PUT", caddyAPIURL, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		http.Error(w, "Failed to create request: "+err.Error(), http.StatusInternalServerError)
 		return
