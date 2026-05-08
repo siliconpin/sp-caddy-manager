@@ -33,6 +33,12 @@ CADDY_API_URL=http://localhost:2019/config/apps/http/servers/srv0/routes
 CADDYFILE_PATH=/etc/caddy/Caddyfile
 ```
 
+You can also set the backend host Caddy should dial (default `127.0.0.1`):
+
+```bash
+BACKEND_HOST=127.0.0.1
+```
+
 ## Run
 
 ```bash
@@ -69,6 +75,14 @@ curl -X POST http://localhost:1011/manage-domain \
   -d '{"action":"add","domain":"app.example.com","port":8080}'
 ```
 
+Override the backend host for a single request by including `backend_host` in the JSON payload:
+
+```bash
+curl -X POST http://localhost:1011/manage-domain \
+  -H "Content-Type: application/json" \
+  -d '{"action":"add","domain":"app.example.com","port":8080,"backend_host":"10.0.0.140"}'
+```
+
 Delete a domain:
 
 ```bash
@@ -83,6 +97,14 @@ Add raw Caddyfile content:
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
   -d '{"action":"add-caddyfile","content":"app.example.com {\n  reverse_proxy localhost:8080\n}"}'
+```
+
+Import a `.caddy` file directly (multipart form upload). Filename should be like `sp-api.ns77.domain.com.caddy` — the domain is inferred from the filename:
+
+```bash
+curl -X POST http://localhost:1011/manage-domain \
+  -F action=import-caddyfile \
+  -F file=@sp-api.ns77.domain.com.caddy
 ```
 
 List entries:
