@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,9 +49,25 @@ func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req DomainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		if err := r.ParseMultipartForm(10 << 20); err != nil {
+			http.Error(w, "failed to parse multipart form: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Action = r.FormValue("action")
+		req.Domain = r.FormValue("domain")
+		if p := r.FormValue("port"); p != "" {
+			if v, err := strconv.Atoi(p); err == nil {
+				req.Port = v
+			}
+		}
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	switch req.Action {
@@ -60,6 +77,8 @@ func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 		a.handleDeleteDomainAction(w, req)
 	case "add-caddyfile":
 		a.handleAddCaddyfileAction(w, req)
+	case "import-caddyfile":
+		a.handleImportCaddyfileAction(w, r)
 	case "list-db":
 		a.handleListDomainsAction(w)
 	case "list-db-with-content":
@@ -69,6 +88,86 @@ func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 	}
+}
+
+func (a *App) handleImportCaddyfileAction(w http.ResponseWriter, r *http.Request) {
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file field is required: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	contentBytes, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "failed to read uploaded file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	filename := header.Filename
+	domain := filename
+	if strings.HasSuffix(domain, ".caddy") {
+		domain = strings.TrimSuffix(domain, ".caddy")
+	}
+
+	domain, err = normalizeDomain(domain)
+	if err != nil {
+		http.Error(w, "invalid domain from filename: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// attempt to detect port from content
+	_, port, perr := parseCaddyfileDomainAndPort(string(contentBytes))
+	if perr != nil {
+		http.Error(w, "failed to detect port from content: "+perr.Error(), http.StatusBadRequest)
+		return
+	}
+
+	filenamePath := a.domainFilePath(domain)
+
+	tx, err := a.DB.Begin()
+	if err != nil {
+		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, port, string(contentBytes), now, now, 0)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if isUniqueConstraintError(err) {
+			status = http.StatusConflict
+		}
+		http.Error(w, "Failed to save to database: "+err.Error(), status)
+		return
+	}
+
+	if err := os.WriteFile(filenamePath, contentBytes, 0644); err != nil {
+		http.Error(w, "Failed to save file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := CaddyConfigUpdate(a.CaddyfilePath); err != nil {
+		_ = os.Remove(filenamePath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		_ = os.Remove(filenamePath)
+		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	committed = true
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Imported Caddyfile for domain %s (port %d) and saved to %s", domain, port, filenamePath)
 }
 
 type dbEntry struct {
