@@ -508,35 +508,67 @@ func routeHosts(route map[string]interface{}) []string {
 }
 
 func routePort(route map[string]interface{}) int {
-	handles, ok := route["handle"].([]interface{})
+	if port := routePortFromHandles(route["handle"]); port != 0 {
+		return port
+	}
+
+	return 0
+}
+
+func routePortFromHandles(rawHandles interface{}) int {
+	handles, ok := rawHandles.([]interface{})
 	if !ok {
 		return 0
 	}
 
 	for _, item := range handles {
 		handle, ok := item.(map[string]interface{})
-		if !ok || handle["handler"] != "reverse_proxy" {
+		if !ok {
 			continue
 		}
 
-		upstreams, ok := handle["upstreams"].([]interface{})
-		if !ok || len(upstreams) == 0 {
-			continue
+		switch handle["handler"] {
+		case "reverse_proxy":
+			if port := reverseProxyPort(handle); port != 0 {
+				return port
+			}
+		case "subroute":
+			routes, ok := handle["routes"].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, rawRoute := range routes {
+				route, ok := rawRoute.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if port := routePort(route); port != 0 {
+					return port
+				}
+			}
 		}
+	}
 
-		upstream, ok := upstreams[0].(map[string]interface{})
+	return 0
+}
+
+func reverseProxyPort(handle map[string]interface{}) int {
+	upstreams, ok := handle["upstreams"].([]interface{})
+	if !ok {
+		return 0
+	}
+
+	for _, rawUpstream := range upstreams {
+		upstream, ok := rawUpstream.(map[string]interface{})
 		if !ok {
 			continue
 		}
 
 		dial, ok := upstream["dial"].(string)
-		if !ok {
-			continue
-		}
-
-		port, ok := portFromAddress(dial)
 		if ok {
-			return port
+			if port, ok := portFromAddress(dial); ok {
+				return port
+			}
 		}
 	}
 
