@@ -101,10 +101,13 @@ func TestE2E_AddDeleteList(t *testing.T) {
 	}
 
 	var initial []map[string]interface{}
-	assertGetJSON(t, serverURL+"/api/domains", &initial)
+	postJSONAction(t, serverURL, map[string]interface{}{"action": "list-db"}, &initial)
 
-	addBody, _ := json.Marshal(map[string]interface{}{"domain": "example.test", "port": 8081})
-	resp := postJSON(t, serverURL+"/add-domain", addBody)
+	resp := postJSON(t, serverURL+"/manage-domain", map[string]interface{}{
+		"action": "add",
+		"domain": "example.test",
+		"port":   8081,
+	})
 	assertStatusOK(t, resp)
 
 	caddyFile := filepath.Join(caddyDir, "example.test.caddy")
@@ -116,13 +119,24 @@ func TestE2E_AddDeleteList(t *testing.T) {
 		Domain string `json:"domain"`
 		Port   int    `json:"port"`
 	}
-	assertGetJSON(t, serverURL+"/api/domains", &listAfterAdd)
+	postJSONAction(t, serverURL, map[string]interface{}{"action": "list-db"}, &listAfterAdd)
 	if len(listAfterAdd) != 1 || listAfterAdd[0].Domain != "example.test" || listAfterAdd[0].Port != 8081 {
 		t.Fatalf("unexpected domain list after add: %#v", listAfterAdd)
 	}
 
-	deleteBody, _ := json.Marshal(map[string]string{"domain": "example.test"})
-	resp = postJSON(t, serverURL+"/delete-domain", deleteBody)
+	var caddyListAfterAdd []struct {
+		Domain string `json:"domain"`
+		Port   int    `json:"port"`
+	}
+	postJSONAction(t, serverURL, map[string]interface{}{"action": "list-caddy"}, &caddyListAfterAdd)
+	if len(caddyListAfterAdd) != 1 || caddyListAfterAdd[0].Domain != "example.test" || caddyListAfterAdd[0].Port != 8081 {
+		t.Fatalf("unexpected caddy domain list after add: %#v", caddyListAfterAdd)
+	}
+
+	resp = postJSON(t, serverURL+"/manage-domain", map[string]interface{}{
+		"action": "delete",
+		"domain": "example.test",
+	})
 	assertStatusOK(t, resp)
 
 	if _, err := os.Stat(caddyFile); err == nil {
@@ -130,7 +144,13 @@ func TestE2E_AddDeleteList(t *testing.T) {
 	}
 
 	var finalList []map[string]interface{}
-	assertGetJSON(t, serverURL+"/api/domains", &finalList)
+	postJSONAction(t, serverURL, map[string]interface{}{"action": "list-db"}, &finalList)
+
+	var finalCaddyList []map[string]interface{}
+	postJSONAction(t, serverURL, map[string]interface{}{"action": "list-caddy"}, &finalCaddyList)
+	if len(finalCaddyList) != 0 {
+		t.Fatalf("expected no caddy entries after delete, got %#v", finalCaddyList)
+	}
 }
 
 func waitForServer(t *testing.T, stdout io.Reader) (string, error) {
@@ -173,13 +193,30 @@ func assertGetJSON(t *testing.T, url string, target any) {
 	}
 }
 
-func postJSON(t *testing.T, url string, body []byte) *http.Response {
+func postJSON(t *testing.T, url string, body interface{}) *http.Response {
 	t.Helper()
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return resp
+}
+
+func postJSONAction(t *testing.T, serverURL string, body interface{}, target any) {
+	t.Helper()
+	resp := postJSON(t, serverURL+"/manage-domain", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST /manage-domain returned %d: %s", resp.StatusCode, string(body))
+	}
+	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertStatusOK(t *testing.T, resp *http.Response) {

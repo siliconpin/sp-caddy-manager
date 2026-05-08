@@ -74,11 +74,6 @@ func main() {
 func newRouter() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/manage-domain", functions.HandleManageDomain)
-	mux.HandleFunc("/add-domain", functions.HandleAddDomain)
-	mux.HandleFunc("/delete-domain", functions.HandleDeleteDomain)
-	mux.HandleFunc("/api/domains", functions.HandleListDomains)
-	mux.HandleFunc("/version", functions.HandleVersion)
-	mux.HandleFunc("/health", functions.HandleHealth)
 	mux.Handle("/", http.FileServer(http.Dir("./html")))
 	return mux
 }

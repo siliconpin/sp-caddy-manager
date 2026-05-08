@@ -16,6 +16,11 @@ var DB *sql.DB
 var CaddyConfigDir string
 var CaddyAPIURL string
 
+type domainEntry struct {
+	Domain string `json:"domain"`
+	Port   int    `json:"port"`
+}
+
 func HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
@@ -36,39 +41,13 @@ func HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 		handleDeleteDomainAction(w, r, req)
 	case "add-caddyfile":
 		handleAddCaddyfileAction(w, r, req)
+	case "list-db":
+		handleListDomainsAction(w, r)
+	case "list-caddy":
+		handleListCaddyDomainsAction(w, r)
 	default:
-		handleAddDomainAction(w, r, req)
+		http.Error(w, "unknown action", http.StatusBadRequest)
 	}
-}
-
-func HandleAddDomain(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req DomainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	handleAddDomainAction(w, r, req)
-}
-
-func HandleDeleteDomain(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req DomainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	handleDeleteDomainAction(w, r, req)
 }
 
 func handleAddDomainAction(w http.ResponseWriter, r *http.Request, req DomainRequest) {
@@ -316,12 +295,7 @@ func routeMatchesDomain(route map[string]interface{}, domain string) bool {
 	return false
 }
 
-func HandleListDomains(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only GET allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func handleListDomainsAction(w http.ResponseWriter, r *http.Request) {
 	rows, err := DB.Query("SELECT domain, port FROM domains ORDER BY domain")
 	if err != nil {
 		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
@@ -329,12 +303,7 @@ func HandleListDomains(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type domainEntry struct {
-		Domain string `json:"domain"`
-		Port   int    `json:"port"`
-	}
-
-	var entries []domainEntry
+	entries := make([]domainEntry, 0)
 	for rows.Next() {
 		var e domainEntry
 		if err := rows.Scan(&e.Domain, &e.Port); err != nil {
@@ -348,13 +317,120 @@ func HandleListDomains(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(entries)
 }
 
-func HandleVersion(w http.ResponseWriter, r *http.Request) {
-	version := "1.0.0"
+func handleListCaddyDomainsAction(w http.ResponseWriter, r *http.Request) {
+	resp, err := http.Get(CaddyAPIURL)
+	if err != nil {
+		http.Error(w, "Failed to get Caddy config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		http.Error(w, fmt.Sprintf("Failed to get Caddy config: status %d", resp.StatusCode), http.StatusInternalServerError)
+		return
+	}
+
+	var routes []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&routes); err != nil {
+		http.Error(w, "Failed to decode Caddy config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	entries := make([]domainEntry, 0, len(routes))
+	for _, route := range routes {
+		entries = append(entries, caddyDomainEntries(route)...)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"version": version})
+	json.NewEncoder(w).Encode(entries)
 }
 
-func HandleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+func caddyDomainEntries(route map[string]interface{}) []domainEntry {
+	hosts := routeHosts(route)
+	port := routePort(route)
+	if len(hosts) == 0 {
+		return nil
+	}
+
+	entries := make([]domainEntry, 0, len(hosts))
+	for _, host := range hosts {
+		entries = append(entries, domainEntry{Domain: host, Port: port})
+	}
+	return entries
+}
+
+func routeHosts(route map[string]interface{}) []string {
+	match, ok := route["match"].([]interface{})
+	if !ok {
+		return nil
+	}
+
+	var hosts []string
+	for _, item := range match {
+		matcher, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		rawHosts, ok := matcher["host"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, rawHost := range rawHosts {
+			host, ok := rawHost.(string)
+			if ok {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return hosts
+}
+
+func routePort(route map[string]interface{}) int {
+	handles, ok := route["handle"].([]interface{})
+	if !ok {
+		return 0
+	}
+
+	for _, item := range handles {
+		handle, ok := item.(map[string]interface{})
+		if !ok || handle["handler"] != "reverse_proxy" {
+			continue
+		}
+
+		upstreams, ok := handle["upstreams"].([]interface{})
+		if !ok || len(upstreams) == 0 {
+			continue
+		}
+
+		upstream, ok := upstreams[0].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		dial, ok := upstream["dial"].(string)
+		if !ok {
+			continue
+		}
+
+		port, ok := portFromAddress(dial)
+		if ok {
+			return port
+		}
+	}
+
+	return 0
+}
+
+func portFromAddress(addr string) (int, bool) {
+	colonIdx := strings.LastIndex(addr, ":")
+	if colonIdx == -1 || colonIdx == len(addr)-1 {
+		return 0, false
+	}
+
+	port, err := strconv.Atoi(addr[colonIdx+1:])
+	if err != nil {
+		return 0, false
+	}
+	return port, true
 }

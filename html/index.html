@@ -16,6 +16,10 @@
     button:hover { background: #1d4ed8; }
     .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
     .status { font-family: monospace; white-space: pre-wrap; background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #cbd5e1; }
+    .list-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-top: 14px; }
+    .list-panel { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+    .list-panel h3 { margin: 0; padding: 12px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; font-size: 16px; }
+    .list-panel .status { border: 0; border-radius: 0; min-height: 90px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e2e8f0; }
     th { background: #eff6ff; }
@@ -27,20 +31,6 @@
     <p>Use this UI to test APIs and view domains/ports stored in SQLite.</p>
   </header>
   <main>
-    <section>
-      <h2>Health / Version</h2>
-      <div class="grid">
-        <div>
-          <button id="healthButton">Check Health</button>
-          <div id="healthResult" class="status">...</div>
-        </div>
-        <div>
-          <button id="versionButton">Get Version</button>
-          <div id="versionResult" class="status">...</div>
-        </div>
-      </div>
-    </section>
-
     <section>
       <h2>Add Domain</h2>
       <form id="addForm">
@@ -70,59 +60,89 @@
     </section>
 
     <section>
-      <h2>Used Ports</h2>
+      <h2>Domain / Port Entries</h2>
       <button id="refreshDomains">Refresh list</button>
-      <div id="domainsList" class="status">Loading...</div>
+      <div class="list-grid">
+        <div class="list-panel">
+          <h3>Entries from DB</h3>
+          <div id="dbDomainsList" class="status">Loading...</div>
+        </div>
+        <div class="list-panel">
+          <h3>Entries from Caddy</h3>
+          <div id="caddyDomainsList" class="status">Loading...</div>
+        </div>
+      </div>
     </section>
   </main>
 
   <script>
-    const healthButton = document.getElementById('healthButton');
-    const versionButton = document.getElementById('versionButton');
-    const healthResult = document.getElementById('healthResult');
-    const versionResult = document.getElementById('versionResult');
     const addForm = document.getElementById('addForm');
     const deleteForm = document.getElementById('deleteForm');
     const addResult = document.getElementById('addResult');
     const deleteResult = document.getElementById('deleteResult');
     const refreshButton = document.getElementById('refreshDomains');
-    const domainsList = document.getElementById('domainsList');
+    const dbDomainsList = document.getElementById('dbDomainsList');
+    const caddyDomainsList = document.getElementById('caddyDomainsList');
 
     const show = (el, text) => { el.textContent = text; };
-    const request = async (path, method = 'GET', body = null) => {
-      const opts = { method, headers: { 'Content-Type': 'application/json' } };
-      if (body) opts.body = JSON.stringify(body);
-      const resp = await fetch(path, opts);
+    const escapeHtml = value => String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+
+    const request = async body => {
+      const resp = await fetch('/manage-domain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
       const text = await resp.text();
       return { ok: resp.ok, status: resp.status, text };
     };
 
-    const refreshDomains = async () => {
-      domainsList.textContent = 'Loading...';
-      try {
-        const resp = await fetch('/api/domains');
-        if (!resp.ok) throw new Error('Failed to load domains');
-        const data = await resp.json();
-        if (!data.length) {
-          domainsList.textContent = 'No domains registered yet.';
-          return;
-        }
-        const rows = data.map(item => `<tr><td>${item.domain}</td><td>${item.port}</td></tr>`).join('');
-        domainsList.innerHTML = `<table><thead><tr><th>Domain</th><th>Port</th></tr></thead><tbody>${rows}</tbody></table>`;
-      } catch (err) {
-        domainsList.textContent = err.message;
+    const requestJSON = async body => {
+      const resp = await fetch('/manage-domain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`ERROR ${resp.status}: ${text}`);
       }
+      return resp.json();
     };
 
-    healthButton.addEventListener('click', async () => {
-      const resp = await request('/health');
-      show(healthResult, resp.ok ? resp.text : `ERROR ${resp.status}: ${resp.text}`);
-    });
+    const renderDomainTable = (el, data, emptyText) => {
+      if (!data.length) {
+        el.textContent = emptyText;
+        return;
+      }
 
-    versionButton.addEventListener('click', async () => {
-      const resp = await request('/version');
-      show(versionResult, resp.ok ? resp.text : `ERROR ${resp.status}: ${resp.text}`);
-    });
+      const rows = data
+        .map(item => `<tr><td>${escapeHtml(item.domain)}</td><td>${escapeHtml(item.port || '')}</td></tr>`)
+        .join('');
+      el.innerHTML = `<table><thead><tr><th>Domain</th><th>Port</th></tr></thead><tbody>${rows}</tbody></table>`;
+    };
+
+    const refreshDomains = async () => {
+      dbDomainsList.textContent = 'Loading...';
+      caddyDomainsList.textContent = 'Loading...';
+      try {
+        const [dbData, caddyData] = await Promise.all([
+          requestJSON({ action: 'list-db' }),
+          requestJSON({ action: 'list-caddy' })
+        ]);
+
+        renderDomainTable(dbDomainsList, dbData, 'No DB entries.');
+        renderDomainTable(caddyDomainsList, caddyData, 'No Caddy entries.');
+      } catch (err) {
+        dbDomainsList.textContent = err.message;
+        caddyDomainsList.textContent = err.message;
+      }
+    };
 
     addForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -132,7 +152,7 @@
         show(addResult, 'Domain and port are required.');
         return;
       }
-      const resp = await request('/add-domain', 'POST', { domain, port });
+      const resp = await request({ action: 'add', domain, port });
       show(addResult, resp.ok ? resp.text : `ERROR ${resp.status}: ${resp.text}`);
       if (resp.ok) refreshDomains();
     });
@@ -144,7 +164,7 @@
         show(deleteResult, 'Domain is required.');
         return;
       }
-      const resp = await request('/delete-domain', 'POST', { domain });
+      const resp = await request({ action: 'delete', domain });
       show(deleteResult, resp.ok ? resp.text : `ERROR ${resp.status}: ${resp.text}`);
       if (resp.ok) refreshDomains();
     });
