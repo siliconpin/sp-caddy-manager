@@ -95,7 +95,7 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 		}
 	}()
 
-	_, err = tx.Exec("INSERT INTO domains (domain, port) VALUES (?, ?)", domain, req.Port)
+	_, err = tx.Exec("INSERT INTO domains (domain, port, content) VALUES (?, ?, ?)", domain, req.Port, caddyfileContent)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if isUniqueConstraintError(err) {
@@ -153,7 +153,7 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 		}
 	}()
 
-	_, err = tx.Exec("INSERT INTO domains (domain, port) VALUES (?, ?)", domain, port)
+	_, err = tx.Exec("INSERT INTO domains (domain, port, content) VALUES (?, ?, ?)", domain, port, req.Content)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if isUniqueConstraintError(err) {

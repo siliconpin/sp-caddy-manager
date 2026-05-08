@@ -61,7 +61,8 @@ func main() {
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS domains (
 		domain TEXT PRIMARY KEY,
-		port INTEGER
+		port INTEGER,
+		content TEXT
 	)`)
 	if err != nil {
 		log.Fatal(err)
