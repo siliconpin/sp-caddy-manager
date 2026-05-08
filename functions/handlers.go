@@ -62,11 +62,47 @@ func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 		a.handleAddCaddyfileAction(w, req)
 	case "list-db":
 		a.handleListDomainsAction(w)
+	case "list-db-with-content":
+		a.handleListDBWithContentAction(w)
 	case "list-caddy":
 		a.handleListCaddyDomainsAction(w)
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 	}
+}
+
+type dbEntry struct {
+	ID        int    `json:"id"`
+	Domain    string `json:"domain"`
+	Port      int    `json:"port"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func (a *App) handleListDBWithContentAction(w http.ResponseWriter) {
+	rows, err := a.DB.Query("SELECT id, domain, port, content, created_at, updated_at FROM domains WHERE deleted = 0 ORDER BY domain")
+	if err != nil {
+		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	entries := make([]dbEntry, 0)
+	for rows.Next() {
+		var e dbEntry
+		if err := rows.Scan(&e.ID, &e.Domain, &e.Port, &e.Content, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, entries)
 }
 
 func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
@@ -95,7 +131,8 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 		}
 	}()
 
-	_, err = tx.Exec("INSERT INTO domains (domain, port, content) VALUES (?, ?, ?)", domain, req.Port, caddyfileContent)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, req.Port, caddyfileContent, now, now, 0)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if isUniqueConstraintError(err) {
@@ -153,7 +190,8 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 		}
 	}()
 
-	_, err = tx.Exec("INSERT INTO domains (domain, port, content) VALUES (?, ?, ?)", domain, port, req.Content)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, port, req.Content, now, now, 0)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if isUniqueConstraintError(err) {
@@ -193,7 +231,7 @@ func (a *App) handleDeleteDomainAction(w http.ResponseWriter, req DomainRequest)
 	}
 
 	var port int
-	err = a.DB.QueryRow("SELECT port FROM domains WHERE domain = ?", domain).Scan(&port)
+	err = a.DB.QueryRow("SELECT port FROM domains WHERE domain = ? AND deleted = 0", domain).Scan(&port)
 	if err == sql.ErrNoRows {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
@@ -223,7 +261,8 @@ func (a *App) handleDeleteDomainAction(w http.ResponseWriter, req DomainRequest)
 		}
 	}()
 
-	_, err = tx.Exec("DELETE FROM domains WHERE domain = ?", domain)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = tx.Exec("UPDATE domains SET deleted = 1, updated_at = ? WHERE domain = ?", now, domain)
 	if err != nil {
 		http.Error(w, "Failed to delete from database: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -253,7 +292,7 @@ func (a *App) handleDeleteDomainAction(w http.ResponseWriter, req DomainRequest)
 }
 
 func (a *App) handleListDomainsAction(w http.ResponseWriter) {
-	rows, err := a.DB.Query("SELECT domain, port FROM domains ORDER BY domain")
+	rows, err := a.DB.Query("SELECT domain, port FROM domains WHERE deleted = 0 ORDER BY domain")
 	if err != nil {
 		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
 		return

@@ -94,6 +94,10 @@ curl -X POST http://localhost:1011/manage-domain \
 
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -d '{"action":"list-db-with-content"}'
+
+curl -X POST http://localhost:1011/manage-domain \
+  -H "Content-Type: application/json" \
   -d '{"action":"list-caddy"}'
 ```
 
