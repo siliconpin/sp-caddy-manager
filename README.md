@@ -30,6 +30,7 @@ PORT=1011
 DB_PATH=./domains.sqlite
 CADDY_CONFIG_DIR=/etc/caddy/conf.d
 CADDY_API_URL=http://localhost:2019/config/apps/http/servers/srv0/routes
+CADDYFILE_PATH=/etc/caddy/Caddyfile
 ```
 
 ## Run
@@ -59,6 +60,8 @@ go build -o sp-caddy-manager
 ## API
 
 All API calls use `POST /manage-domain` with an `action`.
+
+Domains must be valid hostnames, and ports must be in `1-65535`.
 
 ```bash
 curl -X POST http://localhost:1011/manage-domain \

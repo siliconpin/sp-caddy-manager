@@ -8,20 +8,40 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
-var DB *sql.DB
-var CaddyConfigDir string
-var CaddyAPIURL string
+const caddyRequestTimeout = 5 * time.Second
+
+var domainLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+type App struct {
+	DB             *sql.DB
+	CaddyConfigDir string
+	CaddyAPIURL    string
+	CaddyfilePath  string
+	HTTPClient     *http.Client
+}
 
 type domainEntry struct {
 	Domain string `json:"domain"`
 	Port   int    `json:"port"`
 }
 
-func HandleManageDomain(w http.ResponseWriter, r *http.Request) {
+func NewApp(db *sql.DB, caddyConfigDir, caddyAPIURL, caddyfilePath string) *App {
+	return &App{
+		DB:             db,
+		CaddyConfigDir: caddyConfigDir,
+		CaddyAPIURL:    caddyAPIURL,
+		CaddyfilePath:  caddyfilePath,
+		HTTPClient:     &http.Client{Timeout: caddyRequestTimeout},
+	}
+}
+
+func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
 		return
@@ -33,270 +53,207 @@ func HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route based on action
 	switch req.Action {
 	case "add":
-		handleAddDomainAction(w, r, req)
+		a.handleAddDomainAction(w, req)
 	case "delete":
-		handleDeleteDomainAction(w, r, req)
+		a.handleDeleteDomainAction(w, req)
 	case "add-caddyfile":
-		handleAddCaddyfileAction(w, r, req)
+		a.handleAddCaddyfileAction(w, req)
 	case "list-db":
-		handleListDomainsAction(w, r)
+		a.handleListDomainsAction(w)
 	case "list-caddy":
-		handleListCaddyDomainsAction(w, r)
+		a.handleListCaddyDomainsAction(w)
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 	}
 }
 
-func handleAddDomainAction(w http.ResponseWriter, r *http.Request, req DomainRequest) {
-	if req.Domain == "" {
-		http.Error(w, "domain field is required", http.StatusBadRequest)
+func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
+	domain, err := normalizeDomain(req.Domain)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Port == 0 {
-		http.Error(w, "port field is required", http.StatusBadRequest)
+	if err := validatePort(req.Port); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// 1. Create the Caddyfile snippet for persistence
-	caddyfileContent := fmt.Sprintf("%s {\n\treverse_proxy localhost:%d\n}\n", req.Domain, req.Port)
-	filePath := filepath.Join(CaddyConfigDir, req.Domain+".caddy")
+	filePath := a.domainFilePath(domain)
+	caddyfileContent := fmt.Sprintf("%s {\n\treverse_proxy localhost:%d\n}\n", domain, req.Port)
+
+	tx, err := a.DB.Begin()
+	if err != nil {
+		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	_, err = tx.Exec("INSERT INTO domains (domain, port) VALUES (?, ?)", domain, req.Port)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if isUniqueConstraintError(err) {
+			status = http.StatusConflict
+		}
+		http.Error(w, "Failed to save to database: "+err.Error(), status)
+		return
+	}
 
 	if err := os.WriteFile(filePath, []byte(caddyfileContent), 0644); err != nil {
 		http.Error(w, "Failed to save file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 2. Push to Caddy JSON API for instant activation
-	caddyRoute := map[string]interface{}{
-		"match": []map[string]interface{}{
-			{"host": []string{req.Domain}},
-		},
-		"handle": []map[string]interface{}{
-			{
-				"handler": "reverse_proxy",
-				"upstreams": []map[string]string{
-					{"dial": fmt.Sprintf("localhost:%d", req.Port)},
-				},
-			},
-		},
-		"terminal": true,
-	}
-
-	jsonPayload, _ := json.Marshal(caddyRoute)
-	resp, err := http.Post(CaddyAPIURL, "application/json", bytes.NewBuffer(jsonPayload))
-	if err != nil || resp.StatusCode >= 400 {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		http.Error(w, "Caddy API update failed", http.StatusInternalServerError)
+	if err := a.addDomainToCaddyAPI(domain, req.Port); err != nil {
+		_ = os.Remove(filePath)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer resp.Body.Close()
 
-	// Insert into database
-	_, err = DB.Exec("INSERT INTO domains (domain, port) VALUES (?, ?)", req.Domain, req.Port)
-	if err != nil {
-		http.Error(w, "Failed to save to database: "+err.Error(), http.StatusInternalServerError)
+	if err := tx.Commit(); err != nil {
+		_ = os.Remove(filePath)
+		_ = a.removeDomainFromCaddyAPI(domain)
+		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	committed = true
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Domain %s added successfully and saved to %s", req.Domain, filePath)
+	fmt.Fprintf(w, "Domain %s added successfully and saved to %s", domain, filePath)
 }
 
-func handleAddCaddyfileAction(w http.ResponseWriter, r *http.Request, req DomainRequest) {
-	if req.Content == "" {
+func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest) {
+	if strings.TrimSpace(req.Content) == "" {
 		http.Error(w, "content field is required for add-caddyfile action", http.StatusBadRequest)
 		return
 	}
 
-	// Extract domain from content (first line typically contains domain)
-	lines := strings.Split(req.Content, "\n")
-	if len(lines) == 0 {
-		http.Error(w, "content is empty", http.StatusBadRequest)
+	domain, port, err := parseCaddyfileDomainAndPort(req.Content)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Parse domain from first line (e.g., "domain.com {" -> "domain.com")
-	firstLine := strings.TrimSpace(lines[0])
-	fields := strings.Fields(firstLine)
-	if len(fields) == 0 {
-		http.Error(w, "could not extract domain from content", http.StatusBadRequest)
+	filename := a.domainFilePath(domain)
+	tx, err := a.DB.Begin()
+	if err != nil {
+		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	domain := fields[0]
-
-	if domain == "" {
-		http.Error(w, "could not extract domain from content", http.StatusBadRequest)
-		return
-	}
-
-	// Extract port from reverse_proxy line
-	var port int
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "reverse_proxy") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				addr := parts[1]
-				if colonIdx := strings.LastIndex(addr, ":"); colonIdx != -1 {
-					portStr := addr[colonIdx+1:]
-					parsedPort, err := strconv.Atoi(portStr)
-					if err == nil {
-						port = parsedPort
-						break
-					}
-				}
-			}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
 		}
-	}
+	}()
 
-	if port == 0 {
-		http.Error(w, "could not extract port from reverse_proxy line", http.StatusBadRequest)
+	_, err = tx.Exec("INSERT INTO domains (domain, port) VALUES (?, ?)", domain, port)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if isUniqueConstraintError(err) {
+			status = http.StatusConflict
+		}
+		http.Error(w, "Failed to save to database: "+err.Error(), status)
 		return
 	}
-
-	filename := filepath.Join(CaddyConfigDir, domain+".caddy")
 
 	if err := os.WriteFile(filename, []byte(req.Content), 0644); err != nil {
 		http.Error(w, "Failed to save file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Update Caddy config
-	if err := CaddyConfigUpdate(filepath.Join(CaddyConfigDir, "Caddyfile")); err != nil {
+	if err := CaddyConfigUpdate(a.CaddyfilePath); err != nil {
+		_ = os.Remove(filename)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Insert into database
-	_, err := DB.Exec("INSERT INTO domains (domain, port) VALUES (?, ?)", domain, port)
-	if err != nil {
-		http.Error(w, "Failed to save to database: "+err.Error(), http.StatusInternalServerError)
+	if err := tx.Commit(); err != nil {
+		_ = os.Remove(filename)
+		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	committed = true
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Caddyfile content added successfully for domain %s (port %d) and saved to %s", domain, port, filename)
 }
 
-func handleDeleteDomainAction(w http.ResponseWriter, r *http.Request, req DomainRequest) {
-	if req.Domain == "" {
-		http.Error(w, "domain field is required", http.StatusBadRequest)
+func (a *App) handleDeleteDomainAction(w http.ResponseWriter, req DomainRequest) {
+	domain, err := normalizeDomain(req.Domain)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Check if domain exists in DB
 	var port int
-	err := DB.QueryRow("SELECT port FROM domains WHERE domain = ?", req.Domain).Scan(&port)
+	err = a.DB.QueryRow("SELECT port FROM domains WHERE domain = ?", domain).Scan(&port)
 	if err == sql.ErrNoRows {
 		http.Error(w, "Domain not found", http.StatusNotFound)
 		return
-	} else if err != nil {
+	}
+	if err != nil {
 		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Check if domain file exists in Caddy config
-	filePath := filepath.Join(CaddyConfigDir, req.Domain+".caddy")
-	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-		http.Error(w, "Failed to remove file: "+err.Error(), http.StatusInternalServerError)
+	filePath := a.domainFilePath(domain)
+	fileContent, fileErr := os.ReadFile(filePath)
+	fileExisted := fileErr == nil
+	if fileErr != nil && !os.IsNotExist(fileErr) {
+		http.Error(w, "Failed to read domain file: "+fileErr.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	_, err = DB.Exec("DELETE FROM domains WHERE domain = ?", req.Domain)
+	tx, err := a.DB.Begin()
+	if err != nil {
+		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	_, err = tx.Exec("DELETE FROM domains WHERE domain = ?", domain)
 	if err != nil {
 		http.Error(w, "Failed to delete from database: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if err := removeDomainFromCaddyAPI(req.Domain); err != nil {
+	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		http.Error(w, "Failed to remove file: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := a.removeDomainFromCaddyAPI(domain); err != nil {
+		restoreFile(filePath, fileContent, fileExisted)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	if err := tx.Commit(); err != nil {
+		restoreFile(filePath, fileContent, fileExisted)
+		_ = a.addDomainToCaddyAPI(domain, port)
+		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	committed = true
+
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Domain %s deleted successfully", req.Domain)
+	fmt.Fprintf(w, "Domain %s deleted successfully", domain)
 }
 
-func removeDomainFromCaddyAPI(domain string) error {
-	resp, err := http.Get(CaddyAPIURL)
-	if err != nil {
-		return fmt.Errorf("failed to get Caddy config: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("failed to get Caddy config: status %d", resp.StatusCode)
-	}
-
-	var routes []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&routes); err != nil {
-		return fmt.Errorf("failed to decode Caddy config: %v", err)
-	}
-
-	newRoutes := routes[:0]
-	for _, route := range routes {
-		if routeMatchesDomain(route, domain) {
-			continue
-		}
-		newRoutes = append(newRoutes, route)
-	}
-
-	jsonPayload, err := json.Marshal(newRoutes)
-	if err != nil {
-		return fmt.Errorf("failed to encode Caddy config: %v", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPut, CaddyAPIURL, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return fmt.Errorf("failed to create Caddy config request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to update Caddy config: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("Caddy config update failed: status %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
-func routeMatchesDomain(route map[string]interface{}, domain string) bool {
-	match, ok := route["match"].([]interface{})
-	if !ok {
-		return false
-	}
-
-	for _, item := range match {
-		matcher, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		hosts, ok := matcher["host"].([]interface{})
-		if !ok {
-			continue
-		}
-
-		for _, host := range hosts {
-			if host == domain {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-func handleListDomainsAction(w http.ResponseWriter, r *http.Request) {
-	rows, err := DB.Query("SELECT domain, port FROM domains ORDER BY domain")
+func (a *App) handleListDomainsAction(w http.ResponseWriter) {
+	rows, err := a.DB.Query("SELECT domain, port FROM domains ORDER BY domain")
 	if err != nil {
 		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -312,26 +269,18 @@ func handleListDomainsAction(w http.ResponseWriter, r *http.Request) {
 		}
 		entries = append(entries, e)
 	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(entries)
+	writeJSON(w, entries)
 }
 
-func handleListCaddyDomainsAction(w http.ResponseWriter, r *http.Request) {
-	resp, err := http.Get(CaddyAPIURL)
+func (a *App) handleListCaddyDomainsAction(w http.ResponseWriter) {
+	routes, err := a.getCaddyRoutes()
 	if err != nil {
-		http.Error(w, "Failed to get Caddy config: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		http.Error(w, fmt.Sprintf("Failed to get Caddy config: status %d", resp.StatusCode), http.StatusInternalServerError)
-		return
-	}
-
-	var routes []map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&routes); err != nil {
-		http.Error(w, "Failed to decode Caddy config: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -340,8 +289,180 @@ func handleListCaddyDomainsAction(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, caddyDomainEntries(route)...)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(entries)
+	writeJSON(w, entries)
+}
+
+func (a *App) addDomainToCaddyAPI(domain string, port int) error {
+	caddyRoute := map[string]interface{}{
+		"match": []map[string]interface{}{
+			{"host": []string{domain}},
+		},
+		"handle": []map[string]interface{}{
+			{
+				"handler": "reverse_proxy",
+				"upstreams": []map[string]string{
+					{"dial": fmt.Sprintf("localhost:%d", port)},
+				},
+			},
+		},
+		"terminal": true,
+	}
+
+	jsonPayload, err := json.Marshal(caddyRoute)
+	if err != nil {
+		return fmt.Errorf("failed to encode Caddy route: %v", err)
+	}
+
+	resp, err := a.HTTPClient.Post(a.CaddyAPIURL, "application/json", bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return fmt.Errorf("Caddy API update failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("Caddy API update failed: status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func (a *App) removeDomainFromCaddyAPI(domain string) error {
+	routes, err := a.getCaddyRoutes()
+	if err != nil {
+		return err
+	}
+
+	newRoutes := routes[:0]
+	for _, route := range routes {
+		if routeMatchesDomain(route, domain) {
+			continue
+		}
+		newRoutes = append(newRoutes, route)
+	}
+
+	jsonPayload, err := json.Marshal(newRoutes)
+	if err != nil {
+		return fmt.Errorf("failed to encode Caddy config: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPut, a.CaddyAPIURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return fmt.Errorf("failed to create Caddy config request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update Caddy config: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("Caddy config update failed: status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func (a *App) getCaddyRoutes() ([]map[string]interface{}, error) {
+	resp, err := a.HTTPClient.Get(a.CaddyAPIURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Caddy config: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("failed to get Caddy config: status %d", resp.StatusCode)
+	}
+
+	var routes []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&routes); err != nil {
+		return nil, fmt.Errorf("failed to decode Caddy config: %v", err)
+	}
+	return routes, nil
+}
+
+func (a *App) domainFilePath(domain string) string {
+	return filepath.Join(a.CaddyConfigDir, domain+".caddy")
+}
+
+func parseCaddyfileDomainAndPort(content string) (string, int, error) {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return "", 0, fmt.Errorf("content is empty")
+	}
+
+	fields := strings.Fields(strings.TrimSpace(lines[0]))
+	if len(fields) == 0 {
+		return "", 0, fmt.Errorf("could not extract domain from content")
+	}
+
+	domain, err := normalizeDomain(fields[0])
+	if err != nil {
+		return "", 0, err
+	}
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "reverse_proxy") {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+
+		port, ok := portFromAddress(parts[1])
+		if ok {
+			return domain, port, nil
+		}
+	}
+
+	return "", 0, fmt.Errorf("could not extract port from reverse_proxy line")
+}
+
+func normalizeDomain(domain string) (string, error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	domain = strings.TrimSuffix(domain, ".")
+	if domain == "" {
+		return "", fmt.Errorf("domain field is required")
+	}
+	if strings.ContainsAny(domain, `/\`) || strings.Contains(domain, "..") {
+		return "", fmt.Errorf("invalid domain")
+	}
+	if len(domain) > 253 {
+		return "", fmt.Errorf("domain is too long")
+	}
+
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return "", fmt.Errorf("domain must include at least one dot")
+	}
+	for _, label := range labels {
+		if !domainLabelPattern.MatchString(label) {
+			return "", fmt.Errorf("invalid domain")
+		}
+	}
+
+	return domain, nil
+}
+
+func validatePort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	return nil
+}
+
+func portFromAddress(addr string) (int, bool) {
+	colonIdx := strings.LastIndex(addr, ":")
+	if colonIdx == -1 || colonIdx == len(addr)-1 {
+		return 0, false
+	}
+
+	port, err := strconv.Atoi(addr[colonIdx+1:])
+	if err != nil || validatePort(port) != nil {
+		return 0, false
+	}
+	return port, true
 }
 
 func caddyDomainEntries(route map[string]interface{}) []domainEntry {
@@ -422,15 +543,27 @@ func routePort(route map[string]interface{}) int {
 	return 0
 }
 
-func portFromAddress(addr string) (int, bool) {
-	colonIdx := strings.LastIndex(addr, ":")
-	if colonIdx == -1 || colonIdx == len(addr)-1 {
-		return 0, false
+func routeMatchesDomain(route map[string]interface{}, domain string) bool {
+	for _, host := range routeHosts(route) {
+		if host == domain {
+			return true
+		}
 	}
+	return false
+}
 
-	port, err := strconv.Atoi(addr[colonIdx+1:])
-	if err != nil {
-		return 0, false
+func restoreFile(path string, content []byte, existed bool) {
+	if existed {
+		_ = os.WriteFile(path, content, 0644)
 	}
-	return port, true
+}
+
+func isUniqueConstraintError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique") || strings.Contains(msg, "constraint")
+}
+
+func writeJSON(w http.ResponseWriter, value interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(value)
 }

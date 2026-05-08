@@ -105,6 +105,16 @@ func TestE2E_AddDeleteList(t *testing.T) {
 
 	resp := postJSON(t, serverURL+"/manage-domain", map[string]interface{}{
 		"action": "add",
+		"domain": "../../evil.test",
+		"port":   8081,
+	})
+	assertStatus(t, resp, http.StatusBadRequest)
+	if _, err := os.Stat(filepath.Join(tmp, "evil.test.caddy")); err == nil {
+		t.Fatalf("path-like domain escaped caddy config directory")
+	}
+
+	resp = postJSON(t, serverURL+"/manage-domain", map[string]interface{}{
+		"action": "add",
 		"domain": "example.test",
 		"port":   8081,
 	})
@@ -131,6 +141,17 @@ func TestE2E_AddDeleteList(t *testing.T) {
 	postJSONAction(t, serverURL, map[string]interface{}{"action": "list-caddy"}, &caddyListAfterAdd)
 	if len(caddyListAfterAdd) != 1 || caddyListAfterAdd[0].Domain != "example.test" || caddyListAfterAdd[0].Port != 8081 {
 		t.Fatalf("unexpected caddy domain list after add: %#v", caddyListAfterAdd)
+	}
+
+	resp = postJSON(t, serverURL+"/manage-domain", map[string]interface{}{
+		"action": "add",
+		"domain": "example.test",
+		"port":   8081,
+	})
+	assertStatus(t, resp, http.StatusConflict)
+	postJSONAction(t, serverURL, map[string]interface{}{"action": "list-caddy"}, &caddyListAfterAdd)
+	if len(caddyListAfterAdd) != 1 {
+		t.Fatalf("duplicate add changed caddy routes: %#v", caddyListAfterAdd)
 	}
 
 	resp = postJSON(t, serverURL+"/manage-domain", map[string]interface{}{
@@ -177,22 +198,6 @@ func waitForServer(t *testing.T, stdout io.Reader) (string, error) {
 	return "", fmt.Errorf("timeout waiting for server startup")
 }
 
-func assertGetJSON(t *testing.T, url string, target any) {
-	t.Helper()
-	resp, err := http.Get(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET %s returned %d: %s", url, resp.StatusCode, string(body))
-	}
-	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func postJSON(t *testing.T, url string, body interface{}) *http.Response {
 	t.Helper()
 	payload, err := json.Marshal(body)
@@ -221,9 +226,14 @@ func postJSONAction(t *testing.T, serverURL string, body interface{}, target any
 
 func assertStatusOK(t *testing.T, resp *http.Response) {
 	t.Helper()
+	assertStatus(t, resp, http.StatusOK)
+}
+
+func assertStatus(t *testing.T, resp *http.Response, want int) {
+	t.Helper()
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != want {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, string(body))
+		t.Fatalf("expected status %d, got %d: %s", want, resp.StatusCode, string(body))
 	}
 }

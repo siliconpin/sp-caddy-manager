@@ -1,0 +1,14 @@
+Done
+
+- Added strict domain validation before file operations and Caddy route creation.
+- Added port validation for range 1-65535.
+- Refactored handlers onto an App struct instead of package globals.
+- Added a timeout-bound HTTP client for Caddy API calls.
+- Reworked add/delete flows to reduce partial DB/file/Caddy mismatches and roll back when possible.
+- Added CADDYFILE_PATH for add-caddyfile reloads.
+- Removed the unused assertGetJSON test helper.
+- Added e2e coverage for path-like domain rejection and duplicate add behavior.
+
+Still optional
+
+- Add authentication before exposing this service outside a trusted local network.

@@ -20,8 +20,7 @@ func main() {
 	functions.LoadDotEnv(".env")
 
 	port := functions.GetPortFromEnv()
-	functions.CaddyConfigDir = functions.GetCaddyConfigDir()
-	functions.CaddyAPIURL = functions.GetCaddyAPIURL()
+	caddyConfigDir := functions.GetCaddyConfigDir()
 
 	cmd := exec.Command("which", "caddy")
 	out, err := cmd.Output()
@@ -31,12 +30,12 @@ func main() {
 		log.Printf("INFO: caddy command is available at: %s", strings.TrimSpace(string(out)))
 	}
 
-	if err := os.MkdirAll(functions.CaddyConfigDir, 0744); err != nil {
+	if err := os.MkdirAll(caddyConfigDir, 0744); err != nil {
 		log.Fatalf("Failed to create caddy config directory: %v", err)
 	}
-	log.Printf("INFO: Caddy config directory ensured: %s", functions.CaddyConfigDir)
+	log.Printf("INFO: Caddy config directory ensured: %s", caddyConfigDir)
 
-	emptyFileName := filepath.Join(functions.CaddyConfigDir, "empty.caddy")
+	emptyFileName := filepath.Join(caddyConfigDir, "empty.caddy")
 	if _, err := os.Stat(emptyFileName); os.IsNotExist(err) {
 		if err := os.WriteFile(emptyFileName, []byte(""), 0744); err != nil {
 			log.Fatalf("Failed to create empty.caddy file: %v", err)
@@ -49,7 +48,12 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	functions.DB = db
+	app := functions.NewApp(
+		db,
+		caddyConfigDir,
+		functions.GetCaddyAPIURL(),
+		functions.GetCaddyfilePath(),
+	)
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS domains (
 		domain TEXT PRIMARY KEY,
@@ -68,12 +72,12 @@ func main() {
 
 	actualPort := listener.Addr().(*net.TCPAddr).Port
 	fmt.Printf("Server starting on :%d...\n", actualPort)
-	log.Fatal(http.Serve(listener, newRouter()))
+	log.Fatal(http.Serve(listener, newRouter(app)))
 }
 
-func newRouter() http.Handler {
+func newRouter(app *functions.App) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/manage-domain", functions.HandleManageDomain)
+	mux.HandleFunc("/manage-domain", app.HandleManageDomain)
 	mux.Handle("/", http.FileServer(http.Dir("./html")))
 	return mux
 }

@@ -26,6 +26,10 @@ func GetCaddyAPIURL() string {
 	return GetEnvDefault("CADDY_API_URL", "http://localhost:2019/config/apps/http/servers/srv0/routes")
 }
 
+func GetCaddyfilePath() string {
+	return GetEnvDefault("CADDYFILE_PATH", "/etc/caddy/Caddyfile")
+}
+
 func LoadDotEnv(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
