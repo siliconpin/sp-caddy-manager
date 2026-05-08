@@ -216,7 +216,11 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 	}
 
 	filePath := a.domainFilePath(domain)
-	caddyfileContent := fmt.Sprintf("%s {\n\treverse_proxy localhost:%d\n}\n", domain, req.Port)
+	backendHost := req.BackendHost
+	if strings.TrimSpace(backendHost) == "" {
+		backendHost = GetBackendHost()
+	}
+	caddyfileContent := fmt.Sprintf("%s {\n\treverse_proxy %s:%d\n}\n", domain, backendHost, req.Port)
 
 	tx, err := a.DB.Begin()
 	if err != nil {
@@ -246,7 +250,7 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 		return
 	}
 
-	if err := a.addDomainToCaddyAPI(domain, req.Port); err != nil {
+	if err := a.addDomainToCaddyAPI(domain, req.Port, backendHost); err != nil {
 		_ = os.Remove(filePath)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -380,7 +384,8 @@ func (a *App) handleDeleteDomainAction(w http.ResponseWriter, req DomainRequest)
 
 	if err := tx.Commit(); err != nil {
 		restoreFile(filePath, fileContent, fileExisted)
-		_ = a.addDomainToCaddyAPI(domain, port)
+		// try to restore caddy route using configured backend host
+		_ = a.addDomainToCaddyAPI(domain, port, GetBackendHost())
 		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -430,7 +435,10 @@ func (a *App) handleListCaddyDomainsAction(w http.ResponseWriter) {
 	writeJSON(w, entries)
 }
 
-func (a *App) addDomainToCaddyAPI(domain string, port int) error {
+func (a *App) addDomainToCaddyAPI(domain string, port int, backendHost string) error {
+	if strings.TrimSpace(backendHost) == "" {
+		backendHost = GetBackendHost()
+	}
 	caddyRoute := map[string]interface{}{
 		"match": []map[string]interface{}{
 			{"host": []string{domain}},
@@ -439,7 +447,7 @@ func (a *App) addDomainToCaddyAPI(domain string, port int) error {
 			{
 				"handler": "reverse_proxy",
 				"upstreams": []map[string]string{
-					{"dial": fmt.Sprintf("localhost:%d", port)},
+					{"dial": fmt.Sprintf("%s:%d", backendHost, port)},
 				},
 			},
 		},
