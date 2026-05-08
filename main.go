@@ -21,6 +21,7 @@ func main() {
 
 	port := functions.GetPortFromEnv()
 	caddyConfigDir := functions.GetCaddyConfigDir()
+	caddyfilePath := functions.GetCaddyfilePath()
 
 	cmd := exec.Command("which", "caddy")
 	out, err := cmd.Output()
@@ -43,6 +44,8 @@ func main() {
 		log.Printf("INFO: Created empty.caddy file at %s", emptyFileName)
 	}
 
+	checkCaddyfileImport(caddyfilePath, caddyConfigDir)
+
 	db, err := sql.Open("sqlite3", functions.GetDBPath())
 	if err != nil {
 		log.Fatal(err)
@@ -52,7 +55,7 @@ func main() {
 		db,
 		caddyConfigDir,
 		functions.GetCaddyAPIURL(),
-		functions.GetCaddyfilePath(),
+		caddyfilePath,
 	)
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS domains (
@@ -80,4 +83,24 @@ func newRouter(app *functions.App) http.Handler {
 	mux.HandleFunc("/manage-domain", app.HandleManageDomain)
 	mux.Handle("/", http.FileServer(http.Dir("./html")))
 	return mux
+}
+
+func checkCaddyfileImport(caddyfilePath, caddyConfigDir string) {
+	expectedImport := "import " + filepath.Join(caddyConfigDir, "*.caddy")
+
+	data, err := os.ReadFile(caddyfilePath)
+	if err != nil {
+		log.Printf("WARNING: Could not read Caddyfile %s: %v", caddyfilePath, err)
+		log.Printf("WARNING: Caddyfile should include: %s", expectedImport)
+		return
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == expectedImport {
+			log.Printf("INFO: Caddyfile import found: %s", expectedImport)
+			return
+		}
+	}
+
+	log.Printf("WARNING: Caddyfile %s is missing required import: %s", caddyfilePath, expectedImport)
 }
