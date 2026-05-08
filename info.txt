@@ -1,5 +1,11 @@
 sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/sp-caddy-manager
 
+chmod 755 /etc/caddy /etc/caddy/conf.d
+chmod 644 /etc/caddy/conf.d/*.caddy
+chown -R caddy:caddy /etc/caddy/conf.d
+
+
+
 /etc/caddy/Caddyfile
 import /etc/caddy/conf.d/*.caddy
 

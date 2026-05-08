@@ -38,13 +38,14 @@ func main() {
 
 	emptyFileName := filepath.Join(caddyConfigDir, "empty.caddy")
 	if _, err := os.Stat(emptyFileName); os.IsNotExist(err) {
-		if err := os.WriteFile(emptyFileName, []byte(""), 0744); err != nil {
+		if err := os.WriteFile(emptyFileName, []byte("\n"), 0744); err != nil {
 			log.Fatalf("Failed to create empty.caddy file: %v", err)
 		}
 		log.Printf("INFO: Created empty.caddy file at %s", emptyFileName)
 	}
 
 	checkCaddyfileImport(caddyfilePath, caddyConfigDir)
+	validateCaddyfile(caddyfilePath)
 
 	db, err := sql.Open("sqlite3", functions.GetDBPath())
 	if err != nil {
@@ -103,4 +104,17 @@ func checkCaddyfileImport(caddyfilePath, caddyConfigDir string) {
 	}
 
 	log.Printf("WARNING: Caddyfile %s is missing required import: %s", caddyfilePath, expectedImport)
+}
+
+func validateCaddyfile(caddyfilePath string) {
+	cmd := exec.Command("caddy", "validate", "--config", caddyfilePath, "--adapter", "caddyfile")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("WARNING: Caddyfile validation failed for %s: %v", caddyfilePath, err)
+		if output := strings.TrimSpace(string(out)); output != "" {
+			log.Printf("WARNING: caddy validate output: %s", output)
+		}
+		return
+	}
+	log.Printf("INFO: Caddyfile validation passed: %s", caddyfilePath)
 }
