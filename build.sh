@@ -18,7 +18,7 @@ esac
 OUTPUT="sp-caddy-manager-$ARCH_NAME"
 
 echo "Building for $ARCH_NAME..."
-go build -o "$OUTPUT"
+go build -buildvcs=false -o "$OUTPUT"
 
 if [ $? -eq 0 ]; then
     echo "Build successful: $OUTPUT"
