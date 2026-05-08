@@ -73,5 +73,5 @@ func GetPortFromEnv() int {
 }
 
 func GetBackendHost() string {
-	return GetEnvDefault("BACKEND_HOST", "127.0.0.1")
+	return GetEnvDefault("BACKEND_HOST", "0.0.0.0")
 }

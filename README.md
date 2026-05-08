@@ -33,10 +33,10 @@ CADDY_API_URL=http://localhost:2019/config/apps/http/servers/srv0/routes
 CADDYFILE_PATH=/etc/caddy/Caddyfile
 ```
 
-You can also set the backend host Caddy should dial (default `127.0.0.1`):
+You can also set the backend host Caddy should dial (default `0.0.0.0`):
 
 ```bash
-BACKEND_HOST=127.0.0.1
+BACKEND_HOST=0.0.0.0
 ```
 
 ## Run
