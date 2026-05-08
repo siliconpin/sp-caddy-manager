@@ -1,8 +1,12 @@
-curl -X POST http://localhost:3000/add-domain \
+curl -X POST http://localhost:3000/manage-domain \
      -H "Content-Type: application/json" \
      -d '{"action":"add", "domain":"sub-domain1.siliconpin.com", "port":8000}'
 
-curl -X POST http://localhost:3000/add-domain \
+curl -X POST http://localhost:3000/manage-domain \
      -H "Content-Type: application/json" \
      -d '{"action":"delete", "domain":"sub-domain1.siliconpin.com"}'
+
+curl -X POST http://localhost:3000/manage-domain \
+     -H "Content-Type: application/json" \
+     -d '{"action":"add-caddyfile", "content":"n8n-pritam-fgdgretk99.siliconpin.com {\n     reverse_proxy 0.0.0.0:5679\n     log {\n         output file /var/log/caddy/igame-stag-access.log {\n            roll_size 5mb      # Rotate at 5MB instead of 100MB\n            roll_keep 2        # Keep 2 files instead of 10\n            roll_keep_for 30d  # Keep for 30 days instead of 90\n        }\n      }\n}\n"}'
 
