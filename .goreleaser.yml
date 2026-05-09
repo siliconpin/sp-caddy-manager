@@ -1,0 +1,41 @@
+project_name: sp-caddy-manager
+
+builds:
+  - main: .
+    binary: sp-caddy-manager
+    ldflags: -s -w
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: tar_gz
+    builds:
+      - sp-caddy-manager
+    format: tar.gz
+    files:
+      - README.md
+      - LICENSE
+  - id: zip_windows
+    builds:
+      - sp-caddy-manager
+    format: zip
+    goos:
+      - windows
+    files:
+      - README.md
+      - LICENSE
+
+snapshot:
+  name_template: "v{{ .Version }}-snapshot"
+
+changelog:
+  use: git
+
+release:
+  github:
+    name_template: "{{ .Tag }}"
