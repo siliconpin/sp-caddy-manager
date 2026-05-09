@@ -15,3 +15,14 @@ ensure at least one .caddy file exists (even an empty one)
 caddy validate --config /etc/caddy/Caddyfile
 
 caddy reload or service caddy restart ...
+
+
+
+:80, :443 {
+    redir https://siliconpin.com/{uri} 301
+}
+ 
+# Refer to the Caddy docs for more information:
+# https://caddyserver.com/docs/caddyfile
+
+import /etc/caddy/conf.d/*.caddy
