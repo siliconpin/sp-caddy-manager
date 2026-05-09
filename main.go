@@ -13,7 +13,7 @@ import (
 
 	"sp-caddy-manager/functions"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -47,7 +47,7 @@ func main() {
 	checkCaddyfileImport(caddyfilePath, caddyConfigDir)
 	validateCaddyfile(caddyfilePath)
 
-	db, err := sql.Open("sqlite3", functions.GetDBPath())
+	db, err := sql.Open("sqlite", functions.GetDBPath())
 	if err != nil {
 		log.Fatal(err)
 	}
