@@ -18,10 +18,13 @@ caddy reload or service caddy restart ...
 
 
 
-:80, :443 {
+:80 {
     redir https://siliconpin.com/{uri} 301
 }
- 
+:443 {
+    redir reverse_proxy localhost
+}
+
 # Refer to the Caddy docs for more information:
 # https://caddyserver.com/docs/caddyfile
 
