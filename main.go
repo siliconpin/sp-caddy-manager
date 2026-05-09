@@ -64,8 +64,8 @@ func main() {
 		domain TEXT UNIQUE,
 		port INTEGER,
 		content TEXT,
-		created_at TEXT,
-		updated_at TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		deleted INTEGER DEFAULT 0
 	)`)
 	if err != nil {
