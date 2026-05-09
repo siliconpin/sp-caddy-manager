@@ -18,6 +18,9 @@ esac
 OUTPUT="sp-caddy-manager-$ARCH_NAME"
 
 echo "Building for $ARCH_NAME..."
+# Use current Go version and proper cross-compilation
+export GOOS=linux
+export GOARCH=$ARCH_NAME
 go build -buildvcs=false -o "$OUTPUT"
 
 if [ $? -eq 0 ]; then
