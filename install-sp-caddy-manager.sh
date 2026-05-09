@@ -38,6 +38,20 @@ else
     sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
 fi
 
+echo "Creating .env file..."
+sudo bash -c "cat > ${INSTALL_DIR}/.env" <<EOF
+PORT=1011
+DB_PATH=${INSTALL_DIR}/domains.sqlite
+CADDY_CONFIG_DIR=/etc/caddy/conf.d
+CADDY_API_URL=http://localhost:2019/config/apps/http/servers/srv0/routes
+CADDYFILE_PATH=/etc/caddy/Caddyfile
+BACKEND_HOST=0.0.0.0
+EOF
+
+echo "Setting permissions for .env file..."
+sudo chmod 644 ${INSTALL_DIR}/.env
+sudo chown root:root ${INSTALL_DIR}/.env
+
 echo "Creating systemd service..."
 sudo bash -c "cat > ${SERVICE_FILE}" <<EOF
 [Unit]
