@@ -61,7 +61,7 @@ func main() {
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS domains (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		domain TEXT UNIQUE,
+		domain TEXT,
 		port INTEGER,
 		content TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

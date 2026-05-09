@@ -215,7 +215,25 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 		return
 	}
 
+	// Check if domain already exists in database (non-deleted)
+	var existingID int
+	err = a.DB.QueryRow("SELECT id FROM domains WHERE domain = ? AND deleted = 0", domain).Scan(&existingID)
+	if err == nil {
+		http.Error(w, "Domain already exists", http.StatusConflict)
+		return
+	}
+	if err != sql.ErrNoRows {
+		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Check if config file already exists
 	filePath := a.domainFilePath(domain)
+	if _, err := os.Stat(filePath); err == nil {
+		http.Error(w, "Config file already exists", http.StatusConflict)
+		return
+	}
+
 	backendHost := req.BackendHost
 	if strings.TrimSpace(backendHost) == "" {
 		backendHost = GetBackendHost()
@@ -237,11 +255,7 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, req.Port, caddyfileContent, now, now, 0)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if isUniqueConstraintError(err) {
-			status = http.StatusConflict
-		}
-		http.Error(w, "Failed to save to database: "+err.Error(), status)
+		http.Error(w, "Failed to save to database: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -280,7 +294,25 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 		return
 	}
 
+	// Check if domain already exists in database (non-deleted)
+	var existingID int
+	err = a.DB.QueryRow("SELECT id FROM domains WHERE domain = ? AND deleted = 0", domain).Scan(&existingID)
+	if err == nil {
+		http.Error(w, "Domain already exists", http.StatusConflict)
+		return
+	}
+	if err != sql.ErrNoRows {
+		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Check if config file already exists
 	filename := a.domainFilePath(domain)
+	if _, err := os.Stat(filename); err == nil {
+		http.Error(w, "Config file already exists", http.StatusConflict)
+		return
+	}
+
 	tx, err := a.DB.Begin()
 	if err != nil {
 		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
@@ -296,11 +328,7 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, port, req.Content, now, now, 0)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if isUniqueConstraintError(err) {
-			status = http.StatusConflict
-		}
-		http.Error(w, "Failed to save to database: "+err.Error(), status)
+		http.Error(w, "Failed to save to database: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
