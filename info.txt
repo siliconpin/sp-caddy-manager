@@ -22,7 +22,7 @@ caddy reload or service caddy restart ...
     redir https://siliconpin.com/{uri} 301
 }
 :443 {
-    redir reverse_proxy localhost
+    reverse_proxy localhost
 }
 
 # Refer to the Caddy docs for more information:
