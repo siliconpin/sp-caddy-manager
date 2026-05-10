@@ -10,8 +10,12 @@ builds:
     goarch:
       - amd64
       - arm64
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -buildmode=default
     # Note: Linux amd64 and arm64 builds enabled with QEMU support for cross-compilation
-    # darwin and windows builds disabled - will re-enable when CGO cross-compilation is properly configured
+    # Explicitly disable darwin and windows builds - only Linux supported - will re-enable when CGO cross-compilation is properly configured
 
 archives:
   - format: binary
