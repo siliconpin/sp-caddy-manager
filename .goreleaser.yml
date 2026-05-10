@@ -9,17 +9,11 @@ builds:
       - linux
     goarch:
       - amd64
-    # Note: Only Linux amd64 build enabled due to sqlite3 CGO compilation issues on cross-platform builds
+      - arm64
+    # Note: Linux amd64 and arm64 builds enabled with QEMU support for cross-compilation
     # darwin and windows builds disabled - will re-enable when CGO cross-compilation is properly configured
 
-archives:
-  - id: tar_gz
-    builds:
-      - sp-caddy-manager
-    format: tar.gz
-    files:
-      - README.md
-      - LICENSE
+# No archives - output just binary files
 
 snapshot:
   name_template: "v{{ .Version }}-snapshot"
