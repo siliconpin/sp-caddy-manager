@@ -13,7 +13,10 @@ builds:
     # Note: Linux amd64 and arm64 builds enabled with QEMU support for cross-compilation
     # darwin and windows builds disabled - will re-enable when CGO cross-compilation is properly configured
 
-# No archives - output just binary files
+archives:
+  - format: binary
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # This creates individual binary files instead of archives
 
 snapshot:
   name_template: "v{{ .Version }}-snapshot"
