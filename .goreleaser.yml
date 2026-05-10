@@ -9,12 +9,8 @@ builds:
       - linux
     goarch:
       - amd64
-    env:
-      - CGO_ENABLED=1
-    flags:
-      - -buildmode=default
-    # Note: Only Linux amd64 builds enabled - ARM64 disabled due to CGO cross-compilation issues
-    # ARM64 builds need proper CGO cross-compilation setup - will re-enable later
+      - arm64
+    # Note: Linux amd64 and arm64 builds enabled - ARM64 may have CGO issues in CI
 
 archives:
   - format: binary
