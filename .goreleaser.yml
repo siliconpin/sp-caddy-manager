@@ -11,7 +11,9 @@ builds:
       - windows
     goarch:
       - amd64
-      - arm64
+      # arm64
+    # Note: arm64 builds disabled due to sqlite3 CGO compilation issues on darwin_arm64
+    # Will re-enable when CGO cross-compilation is properly configured
 
 archives:
   - id: tar_gz
