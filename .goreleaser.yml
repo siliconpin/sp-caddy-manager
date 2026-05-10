@@ -11,9 +11,23 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=1
+    flags:
+      - -v
     ldflags:
       - -linkmode=external
-    # Enables dynamic linking; requires libc on target system
+    overrides:
+      - goos: linux
+        goarch: amd64
+        env:
+          - CGO_ENABLED=1
+      - goos: linux
+        goarch: arm64
+        env:
+          - CGO_ENABLED=1
+          - CC=aarch64-linux-gnu-gcc
+          - AR=aarch64-linux-gnu-ar
+          - PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+    # Dynamically linked with ARM64 cross-compilation support
 
 archives:
   - format: binary
@@ -28,3 +42,5 @@ changelog:
 
 release:
   github:
+    owner: siliconpin
+    name: sp-caddy-manager
