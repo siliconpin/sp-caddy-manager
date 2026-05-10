@@ -7,26 +7,16 @@ builds:
     ldflags: -s -w
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
-      # arm64
-    # Note: arm64 builds disabled due to sqlite3 CGO compilation issues on darwin_arm64
-    # Will re-enable when CGO cross-compilation is properly configured
+    # Note: Only Linux amd64 build enabled due to sqlite3 CGO compilation issues on cross-platform builds
+    # darwin and windows builds disabled - will re-enable when CGO cross-compilation is properly configured
 
 archives:
   - id: tar_gz
     builds:
       - sp-caddy-manager
     format: tar.gz
-    files:
-      - README.md
-      - LICENSE
-  - id: zip_windows
-    builds:
-      - sp-caddy-manager
-    format: zip
     files:
       - README.md
       - LICENSE
