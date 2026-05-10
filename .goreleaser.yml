@@ -11,28 +11,10 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=1
-    ldflags:
-      - -s -w
-    overrides:
-      - goos: linux
-        goarch: amd64
-        env:
-          - CGO_ENABLED=1
-      - goos: linux
-        goarch: arm64
-        env:
-          - CGO_ENABLED=1
-          - CC=aarch64-linux-gnu-gcc
-          - CXX=aarch64-linux-gnu-g++
-          - AR=aarch64-linux-gnu-ar
-          - LD=aarch64-linux-gnu-ld
-          - RANLIB=aarch64-linux-gnu-ranlib
-    # Dynamically linked with ARM64 cross-compilation support
 
 archives:
   - format: binary
     name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
-    # This creates individual binary files without version in name
 
 snapshot:
   name_template: "v{{ .Version }}-snapshot"

@@ -19,13 +19,16 @@ jobs:
 
       - name: Install ARM64 cross-compiler and SQLite3 development files
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
             libc6-arm64-cross \
             libc6-dev-arm64-cross \
             pkg-config \
             libsqlite3-dev:arm64
+          which aarch64-linux-gnu-gcc
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
@@ -34,3 +37,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CGO_ENABLED: 1
+          CC: aarch64-linux-gnu-gcc
+          CXX: aarch64-linux-gnu-g++
