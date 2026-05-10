@@ -5,7 +5,7 @@ set -e
 
 # Configuration
 APP_NAME="sp-caddy-manager"
-BASE_URL="https://siliconpin.com"
+GITHUB_REPO="siliconpin/sp-caddy-manager"
 INSTALL_DIR="/usr/local/bin"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 
@@ -14,10 +14,10 @@ ARCH=$(uname -m)
 
 case "$ARCH" in
     x86_64)
-        BINARY_NAME="${APP_NAME}-amd64"
+        BINARY_NAME="${APP_NAME}_linux_amd64"
         ;;
     aarch64|arm64)
-        BINARY_NAME="${APP_NAME}-arm64"
+        BINARY_NAME="${APP_NAME}_linux_arm64"
         ;;
     *)
         echo "Error: Unsupported architecture $ARCH"
@@ -31,8 +31,12 @@ if command -v "${APP_NAME}" &> /dev/null; then
     sudo cp "${BINARY_PATH}" "${INSTALL_DIR}/${APP_NAME}"
     sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
 else
-    echo "Downloading ${BINARY_NAME}..."
-    curl -L "${BASE_URL}/${BINARY_NAME}" -o "/tmp/${APP_NAME}"
+    echo "Downloading ${BINARY_NAME} from GitHub releases..."
+    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
+    
+    echo "Downloading from: ${DOWNLOAD_URL}"
+    curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
     echo "Installing binary to ${INSTALL_DIR}..."
     sudo mv "/tmp/${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
     sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"

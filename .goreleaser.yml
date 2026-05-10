@@ -15,8 +15,8 @@ builds:
 
 archives:
   - format: binary
-    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    # This creates individual binary files instead of archives
+    name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
+    # This creates individual binary files without version in name
 
 snapshot:
   name_template: "v{{ .Version }}-snapshot"
