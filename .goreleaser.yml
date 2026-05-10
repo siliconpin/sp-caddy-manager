@@ -4,7 +4,7 @@ project_name: sp-caddy-manager
 builds:
   - main: .
     binary: sp-caddy-manager
-    ldflags: -s -w
+    # Remove static linking flags to create dynamically linked binaries
     goos:
       - linux
     goarch:
