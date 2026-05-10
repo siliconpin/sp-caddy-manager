@@ -17,6 +17,12 @@ import (
 )
 
 func main() {
+	// Check for --version flag
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println("v1.3.9")
+		return
+	}
+
 	functions.LoadDotEnv(".env")
 
 	port := functions.GetPortFromEnv()

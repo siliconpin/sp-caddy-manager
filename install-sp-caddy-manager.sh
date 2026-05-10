@@ -25,14 +25,44 @@ case "$ARCH" in
         ;;
 esac
 
+# Get latest release version
+LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+
 if command -v "${APP_NAME}" &> /dev/null; then
-    echo "Binary ${APP_NAME} found. Skipping download..."
-    BINARY_PATH=$(command -v "${APP_NAME}")
-    sudo cp "${BINARY_PATH}" "${INSTALL_DIR}/${APP_NAME}"
-    sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+    echo "Binary ${APP_NAME} found. Checking for updates..."
+    
+    # Try to get current version (this is a simple check - you may want to improve this)
+    CURRENT_VERSION=$(${APP_NAME} --version 2>/dev/null | head -1 || echo "unknown")
+    
+    if [ "$CURRENT_VERSION" = "$LATEST_RELEASE" ] || [ "$CURRENT_VERSION" != "unknown" ]; then
+        echo "Current version: $CURRENT_VERSION"
+        echo "Latest version: $LATEST_RELEASE"
+        
+        if [ "$CURRENT_VERSION" = "$LATEST_RELEASE" ]; then
+            echo "Already up to date. Skipping download."
+        else
+            echo "Updating to version $LATEST_RELEASE..."
+            DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
+            
+            echo "Downloading from: ${DOWNLOAD_URL}"
+            curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
+            echo "Updating binary to ${INSTALL_DIR}..."
+            sudo mv "/tmp/${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
+            sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+            echo "Update completed successfully!"
+        fi
+    else
+        echo "Cannot determine current version. Reinstalling..."
+        DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
+        
+        echo "Downloading from: ${DOWNLOAD_URL}"
+        curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
+        echo "Installing binary to ${INSTALL_DIR}..."
+        sudo mv "/tmp/${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
+        sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+    fi
 else
-    echo "Downloading ${BINARY_NAME} from GitHub releases..."
-    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    echo "Installing ${APP_NAME} version $LATEST_RELEASE..."
     DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
     
     echo "Downloading from: ${DOWNLOAD_URL}"
