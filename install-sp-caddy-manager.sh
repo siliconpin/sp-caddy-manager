@@ -28,6 +28,22 @@ esac
 # Get latest release version
 LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
+# Try to download from releases first, fallback to GitHub blob if releases fail
+echo "Attempting to download from GitHub releases..."
+DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
+
+# Test if release file exists
+if ! curl -s --head "${DOWNLOAD_URL}" | grep -q "200 OK"; then
+    echo "Release file not found. Falling back to GitHub blob..."
+    DOWNLOAD_URL="https://raw.githubusercontent.com/${GITHUB_REPO}/master/install-sp-caddy-manager.sh"
+    echo "Downloading installer from: ${DOWNLOAD_URL}"
+    curl -L "${DOWNLOAD_URL}" -o "/tmp/installer.sh"
+    
+    # Execute the downloaded installer
+    chmod +x "/tmp/installer.sh"
+    exec "/tmp/installer.sh"
+fi
+
 if command -v "${APP_NAME}" &> /dev/null; then
     echo "Binary ${APP_NAME} found. Checking for updates..."
     
@@ -42,7 +58,6 @@ if command -v "${APP_NAME}" &> /dev/null; then
             echo "Already up to date. Skipping download."
         else
             echo "Updating to version $LATEST_RELEASE..."
-            DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
             
             echo "Downloading from: ${DOWNLOAD_URL}"
             curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
@@ -53,7 +68,6 @@ if command -v "${APP_NAME}" &> /dev/null; then
         fi
     else
         echo "Cannot determine current version. Reinstalling..."
-        DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
         
         echo "Downloading from: ${DOWNLOAD_URL}"
         curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
@@ -63,7 +77,6 @@ if command -v "${APP_NAME}" &> /dev/null; then
     fi
 else
     echo "Installing ${APP_NAME} version $LATEST_RELEASE..."
-    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
     
     echo "Downloading from: ${DOWNLOAD_URL}"
     curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
