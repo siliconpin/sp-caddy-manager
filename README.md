@@ -89,6 +89,11 @@ Delete a domain:
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
   -d '{"action":"delete","domain":"app.example.com"}'
+
+curl -X POST http://localhost:1011/manage-domain \
+  -H "Content-Type: application/json" \
+  -d '{"action":"reset-and-import-config-to-db"}'
+
 ```
 
 Add raw Caddyfile content:

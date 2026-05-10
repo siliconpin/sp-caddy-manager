@@ -85,6 +85,8 @@ func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 		a.handleListDBWithContentAction(w)
 	case "list-caddy":
 		a.handleListCaddyDomainsAction(w)
+	case "reset-and-import-config-to-db":
+		a.handleResetAndImportConfigToDBAction(w)
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 	}
@@ -767,6 +769,71 @@ func restoreFile(path string, content []byte, existed bool) {
 func isUniqueConstraintError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "unique") || strings.Contains(msg, "constraint")
+}
+
+func (a *App) handleResetAndImportConfigToDBAction(w http.ResponseWriter) {
+	// Step 1: Update all domains to deleted = 1
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := a.DB.Exec("UPDATE domains SET deleted = 1, updated_at = ?", now)
+	if err != nil {
+		http.Error(w, "Failed to mark all domains as deleted: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Step 2: Read all .caddy files from config directory
+	files, err := os.ReadDir(a.CaddyConfigDir)
+	if err != nil {
+		http.Error(w, "Failed to read config directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	importedCount := 0
+	tx, err := a.DB.Begin()
+	if err != nil {
+		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	for _, file := range files {
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".caddy") {
+			filePath := filepath.Join(a.CaddyConfigDir, file.Name())
+
+			// Read file content
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				continue // Skip files that can't be read
+			}
+
+			// Parse domain and port from content
+			domain, port, err := parseCaddyfileDomainAndPort(string(content))
+			if err != nil {
+				continue // Skip files that can't be parsed
+			}
+
+			// Insert into database
+			_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)",
+				domain, port, string(content), now, now, 0)
+			if err != nil {
+				continue // Skip duplicates and continue
+			}
+			importedCount++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	committed = true
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Successfully reset database and imported %d domain configurations", importedCount)
 }
 
 func writeJSON(w http.ResponseWriter, value interface{}) {
