@@ -287,9 +287,12 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 		return
 	}
 
+	// Wait a bit for Caddy to start SSL certificate process
+	time.Sleep(5 * time.Second)
+
 	// Verify domain is accessible via HTTPS
 	domainURL := "https://" + domain
-	if err := a.verifyDomainWithRetry(domainURL, 2*time.Second, 5); err != nil {
+	if err := a.verifyDomainWithRetry(domainURL, 2*time.Second, 12); err != nil {
 		http.Error(w, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -330,7 +333,7 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 	}
 
 	// Verify domain is accessible via HTTPS before adding to database
-	if err := a.verifyDomainForCaddyfile(domain, req.Content); err != nil {
+	if err := a.verifyDomainForCaddyfile(req.Content); err != nil {
 		http.Error(w, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -526,6 +529,21 @@ func (a *App) addDomainToCaddyAPI(domain string, port int, backendHost string) e
 	if strings.TrimSpace(backendHost) == "" {
 		backendHost = GetBackendHost()
 	}
+
+	// Create Caddy configuration for the domain
+	configContent := fmt.Sprintf("%s {\n    reverse_proxy %s:%d\n}", domain, backendHost, port)
+
+	// Write configuration file
+	filePath := a.domainFilePath(domain)
+	if err := os.WriteFile(filePath, []byte(configContent), 0644); err != nil {
+		return fmt.Errorf("failed to write Caddy config file: %v", err)
+	}
+
+	// Reload Caddy configuration
+	if err := CaddyConfigUpdate(a.CaddyfilePath); err != nil {
+		return fmt.Errorf("failed to reload Caddy: %v", err)
+	}
+
 	return nil
 }
 
@@ -535,28 +553,51 @@ func (a *App) verifyDomainWithRetry(domainURL string, interval time.Duration, ma
 		resp, err := http.Get(domainURL)
 		if err != nil {
 			if i == maxRetries-1 {
-				return fmt.Errorf("SSL failed after %d attempts: %v", maxRetries, err)
+				return fmt.Errorf("SSL failed after %d attempts: %v (This may indicate DNS issues, SSL certificate not yet issued, or domain not pointing to this server)", maxRetries, err)
 			}
 			time.Sleep(interval)
 			continue
 		}
 
-		if resp.StatusCode == 200 {
+		// Accept 200 OK and 3xx redirects as successful SSL verification
+		if resp.StatusCode == 200 || (resp.StatusCode >= 300 && resp.StatusCode < 400) {
 			resp.Body.Close()
 			return nil
 		}
 
+		statusDesc := getStatusDescription(resp.StatusCode)
 		resp.Body.Close()
 		if i == maxRetries-1 {
-			return fmt.Errorf("SSL failed: domain returned status %d", resp.StatusCode)
+			return fmt.Errorf("SSL failed: domain returned status %d (%s)", resp.StatusCode, statusDesc)
 		}
 		time.Sleep(interval)
 	}
 
-	return fmt.Errorf("SSL failed: max retries (%d) exceeded", maxRetries)
+	return fmt.Errorf("SSL failed: max retries exceeded")
 }
 
-func (a *App) verifyDomainForCaddyfile(domain, content string) error {
+func getStatusDescription(statusCode int) string {
+	switch statusCode {
+	case 525:
+		return "SSL Handshake Failed - Certificate may not be issued yet"
+	case 526:
+		return "Invalid SSL Certificate"
+	case 502:
+		return "Bad Gateway - Backend service may not be running"
+	case 503:
+		return "Service Unavailable"
+	case 504:
+		return "Gateway Timeout"
+	case 404:
+		return "Not Found"
+	case 500:
+		return "Internal Server Error"
+	default:
+		return fmt.Sprintf("HTTP %d", statusCode)
+	}
+}
+
+func (a *App) verifyDomainForCaddyfile(content string) error {
 	// Extract domain from content for verification
 	domainFromContent, _, err := parseCaddyfileDomainAndPort(content)
 	if err != nil {
