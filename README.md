@@ -51,10 +51,40 @@ Open:
 http://localhost:1011/
 ```
 
-## Build
+## Installation
+
+### Download Pre-built Binaries
+
+You can download pre-compiled binaries from the releases page:
+
+**GitHub Releases:**
+- https://github.com/siliconpin/sp-caddy-manager/releases
+
+**GitLab Releases:**
+- https://git.siliconpin.com/kar/sp-caddy-manager/releases
+
+Available binaries:
+- `sp-caddy-manager_linux_amd64` - For Intel/AMD 64-bit systems
+- `sp-caddy-manager_linux_arm64` - For ARM 64-bit systems (Raspberry Pi, etc.)
+
+Download the appropriate binary for your system, make it executable, and move it to your PATH:
 
 ```bash
-./build.sh
+# Download for AMD64
+wget https://github.com/siliconpin/sp-caddy-manager/releases/latest/download/sp-caddy-manager_linux_amd64
+chmod +x sp-caddy-manager_linux_amd64
+sudo mv sp-caddy-manager_linux_amd64 /usr/local/bin/sp-caddy-manager
+
+# Or for ARM64
+wget https://github.com/siliconpin/sp-caddy-manager/releases/latest/download/sp-caddy-manager_linux_arm64
+chmod +x sp-caddy-manager_linux_arm64
+sudo mv sp-caddy-manager_linux_arm64 /usr/local/bin/sp-caddy-manager
+```
+
+### Build from Source
+
+```bash
+./build-binaries.sh
 ```
 
 Or directly:

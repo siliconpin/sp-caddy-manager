@@ -1,3 +1,4 @@
 .env
 sp-caddy-manager*
 domains.sqlite
+bin/
