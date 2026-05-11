@@ -292,13 +292,17 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 
 	// Verify domain is accessible via HTTPS
 	domainURL := "https://" + domain
-	if err := a.verifyDomainWithRetry(domainURL, 2*time.Second, 12); err != nil {
+	if err := a.verifyDomainWithRetry(domainURL, 4*time.Second, 16); err != nil {
 		http.Error(w, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Domain %s added successfully and verified", domain)
+	response := map[string]interface{}{
+		"domain": domain,
+		"err":    false,
+		"msg":    "Domain added successfully and verified",
+	}
+	writeJSON(w, response)
 }
 
 func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest) {
