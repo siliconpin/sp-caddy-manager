@@ -179,10 +179,11 @@ type dbEntry struct {
 	Content   string `json:"content"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+	SSL       int    `json:"ssl"`
 }
 
 func (a *App) handleListDBWithContentAction(w http.ResponseWriter) {
-	rows, err := a.DB.Query("SELECT id, domain, port, content, created_at, updated_at FROM domains WHERE deleted = 0 ORDER BY domain")
+	rows, err := a.DB.Query("SELECT id, domain, port, content, created_at, updated_at, ssl FROM domains WHERE deleted = 0 ORDER BY domain")
 	if err != nil {
 		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -192,7 +193,7 @@ func (a *App) handleListDBWithContentAction(w http.ResponseWriter) {
 	entries := make([]dbEntry, 0)
 	for rows.Next() {
 		var e dbEntry
-		if err := rows.Scan(&e.ID, &e.Domain, &e.Port, &e.Content, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Domain, &e.Port, &e.Content, &e.CreatedAt, &e.UpdatedAt, &e.SSL); err != nil {
 			http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -352,8 +353,11 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 	}()
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, port, req.Content, now, now, 0)
+	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted, ssl) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+		domain, port, req.Content, now, now, 0, 1) // SSL verified = 1 initially
 	if err != nil {
+		_ = os.Remove(filename)
+		_ = tx.Rollback()
 		http.Error(w, "Failed to save to database: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -384,6 +388,15 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 		_ = os.Remove(filename)
 		_ = tx.Rollback()
 		http.Error(w, "Caddy API update failed: status %d", resp.StatusCode)
+		return
+	}
+
+	// Update SSL verification status to 1 (verified)
+	_, err = tx.Exec("UPDATE domains SET ssl = 1, updated_at = ? WHERE domain = ?", now, domain)
+	if err != nil {
+		_ = os.Remove(filename)
+		_ = tx.Rollback()
+		http.Error(w, "Failed to update SSL status: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 

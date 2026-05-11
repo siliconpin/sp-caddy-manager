@@ -72,7 +72,8 @@ func main() {
 		content TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		deleted INTEGER DEFAULT 0
+		deleted INTEGER DEFAULT 0,
+		ssl INTEGER DEFAULT 0
 	)`)
 	if err != nil {
 		log.Fatal(err)
