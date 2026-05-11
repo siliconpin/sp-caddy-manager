@@ -621,6 +621,9 @@ func (a *App) removeDomainFromCaddyAPI(domain string) error {
 		return fmt.Errorf("failed to encode Caddy config: %v", err)
 	}
 
+	// Debug: log the payload being sent
+	fmt.Printf("Sending to Caddy API: %s\n", string(jsonPayload))
+
 	req, err := http.NewRequest(http.MethodPut, a.CaddyAPIURL, bytes.NewBuffer(jsonPayload))
 	if err != nil {
 		return fmt.Errorf("failed to create Caddy config request: %v", err)
@@ -633,7 +636,9 @@ func (a *App) removeDomainFromCaddyAPI(domain string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("Caddy config update failed: status %d", resp.StatusCode)
+		// Read response body for more details
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Caddy config update failed: status %d, response: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
