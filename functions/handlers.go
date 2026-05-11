@@ -292,10 +292,7 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 	// Verify domain is accessible via HTTPS
 	domainURL := "https://" + domain
 	if err := a.verifyDomainWithRetry(domainURL, 2*time.Second, 5); err != nil {
-		_ = os.Remove(filePath)
-		_ = a.removeDomainFromCaddyAPI(domain)
-		_ = tx.Rollback()
-		http.Error(w, "Domain added to database but SSL verification failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -336,7 +333,7 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 
 	// Verify domain is accessible via HTTPS before adding to database
 	if err := a.verifyDomainForCaddyfile(domain, req.Content); err != nil {
-		http.Error(w, "Domain verification failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
