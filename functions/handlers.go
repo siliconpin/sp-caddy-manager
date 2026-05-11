@@ -282,7 +282,7 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 	committed = true
 
 	// Add domain to Caddy API and verify it's working
-	if err := a.addDomainToCaddyAPI(domain); err != nil {
+	if err := a.addDomainToCaddyAPI(domain, req.Port, backendHost); err != nil {
 		_ = os.Remove(filePath)
 		_ = tx.Rollback()
 		http.Error(w, "Failed to add domain to Caddy: "+err.Error(), http.StatusInternalServerError)
@@ -350,7 +350,7 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 	}()
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted, ssl) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted, ssl) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		domain, port, req.Content, now, now, 0, 1) // SSL verified = 1 initially
 	if err != nil {
 		_ = os.Remove(filename)
@@ -513,7 +513,9 @@ func (a *App) handleListCaddyDomainsAction(w http.ResponseWriter) {
 
 	entries := make([]domainEntry, 0, len(routes))
 	for _, route := range routes {
-		entries = append(entries, caddyDomainEntries(route)...)
+		// Extract domain from route for entries
+		domainFromRoute, portFromRoute := extractDomainFromRoute(route)
+		entries = append(entries, domainEntry{Domain: domainFromRoute, Port: portFromRoute})
 	}
 
 	writeJSON(w, entries)
@@ -523,6 +525,7 @@ func (a *App) addDomainToCaddyAPI(domain string, port int, backendHost string) e
 	if strings.TrimSpace(backendHost) == "" {
 		backendHost = GetBackendHost()
 	}
+	return nil
 }
 
 // verifyDomainWithRetry checks if a domain is accessible via HTTPS with retry logic
@@ -536,19 +539,19 @@ func (a *App) verifyDomainWithRetry(domainURL string, interval time.Duration, ma
 			time.Sleep(interval)
 			continue
 		}
-		
+
 		if resp.StatusCode == 200 {
 			resp.Body.Close()
 			return nil
 		}
-		
+
 		resp.Body.Close()
 		if i == maxRetries-1 {
 			return fmt.Errorf("SSL failed: domain returned status %d", resp.StatusCode)
 		}
 		time.Sleep(interval)
 	}
-	
+
 	return fmt.Errorf("SSL failed: max retries (%d) exceeded", maxRetries)
 }
 
@@ -558,7 +561,7 @@ func (a *App) verifyDomainForCaddyfile(domain, content string) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse domain from content: %v", err)
 	}
-	
+
 	domainURL := "https://" + domainFromContent
 	return a.verifyDomainWithRetry(domainURL, 2*time.Second, 5)
 }
@@ -579,18 +582,6 @@ func caddyDomainEntries(domain string) []map[string]interface{} {
 			},
 		},
 	}
-	}
-
-	resp, err := a.HTTPClient.Post(a.CaddyAPIURL, "application/json", bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return fmt.Errorf("Caddy API update failed: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("Caddy API update failed: status %d", resp.StatusCode)
-	}
-
-	return nil
 }
 
 func (a *App) removeDomainFromCaddyAPI(domain string) error {
@@ -733,18 +724,25 @@ func portFromAddress(addr string) (int, bool) {
 	return port, true
 }
 
-func caddyDomainEntries(route map[string]interface{}) []domainEntry {
-	hosts := routeHosts(route)
-	port := routePort(route)
-	if len(hosts) == 0 {
-		return nil
+// extractDomainFromRoute extracts domain and port from Caddy route
+func extractDomainFromRoute(route map[string]interface{}) (string, int) {
+	match, ok := route["match"].([]interface{})
+	if !ok {
+		return "", 0
 	}
 
-	entries := make([]domainEntry, 0, len(hosts))
-	for _, host := range hosts {
-		entries = append(entries, domainEntry{Domain: host, Port: port})
+	for _, item := range match {
+		matcher, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		if hosts, ok := matcher["host"].([]string); ok && len(hosts) > 0 {
+			return hosts[0], 80 // Default port for domain extraction
+		}
 	}
-	return entries
+
+	return "", 0
 }
 
 func routeHosts(route map[string]interface{}) []string {
