@@ -752,12 +752,73 @@ func extractDomainFromRoute(route map[string]interface{}) (string, int) {
 			continue
 		}
 
-		if hosts, ok := matcher["host"].([]string); ok && len(hosts) > 0 {
-			return hosts[0], 80 // Default port for domain extraction
+		if hosts, ok := matcher["host"].([]interface{}); ok && len(hosts) > 0 {
+			if host, ok := hosts[0].(string); ok && host != "" {
+				// Try to extract port from reverse_proxy upstream
+				if port := extractPortFromRoute(route); port > 0 {
+					return host, port
+				}
+				return host, 80 // Default port
+			}
 		}
 	}
 
 	return "", 0
+}
+
+func extractPortFromRoute(route map[string]interface{}) int {
+	// Navigate through handle array to find reverse_proxy
+	if handles, ok := route["handle"].([]interface{}); ok {
+		for _, handle := range handles {
+			if handleMap, ok := handle.(map[string]interface{}); ok {
+				// Check for subroute
+				if handler, ok := handleMap["handler"].(string); ok && handler == "subroute" {
+					if routes, ok := handleMap["routes"].([]interface{}); ok {
+						for _, subRoute := range routes {
+							if subRouteMap, ok := subRoute.(map[string]interface{}); ok {
+								if subHandles, ok := subRouteMap["handle"].([]interface{}); ok {
+									for _, subHandle := range subHandles {
+										if subHandleMap, ok := subHandle.(map[string]interface{}); ok {
+											if handler, ok := subHandleMap["handler"].(string); ok && handler == "reverse_proxy" {
+												if upstreams, ok := subHandleMap["upstreams"].([]interface{}); ok && len(upstreams) > 0 {
+													if upstream, ok := upstreams[0].(map[string]interface{}); ok {
+														if dial, ok := upstream["dial"].(string); ok {
+															return extractPortFromDial(dial)
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				// Direct reverse_proxy handler
+				if handler, ok := handleMap["handler"].(string); ok && handler == "reverse_proxy" {
+					if upstreams, ok := handleMap["upstreams"].([]interface{}); ok && len(upstreams) > 0 {
+						if upstream, ok := upstreams[0].(map[string]interface{}); ok {
+							if dial, ok := upstream["dial"].(string); ok {
+								return extractPortFromDial(dial)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func extractPortFromDial(dial string) int {
+	parts := strings.Split(dial, ":")
+	if len(parts) >= 2 {
+		if port, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+			return port
+		}
+	}
+	return 0
 }
 
 func routeHosts(route map[string]interface{}) []string {

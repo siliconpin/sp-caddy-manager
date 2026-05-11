@@ -16,10 +16,12 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+var version = "dev"
+
 func main() {
 	// Check for --version flag
 	if len(os.Args) > 1 && os.Args[1] == "--version" {
-		fmt.Println("v1.3.9")
+		fmt.Println(version)
 		return
 	}
 
