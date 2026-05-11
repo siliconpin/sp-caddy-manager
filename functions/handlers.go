@@ -19,6 +19,109 @@ const caddyRequestTimeout = 5 * time.Second
 
 var domainLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
+// ============================================================================
+// RESPONSE HELPER FUNCTIONS
+// ============================================================================
+
+// writeJSONResponse writes a consistent JSON response with domain, err, and msg fields
+func writeJSONResponse(w http.ResponseWriter, domain string, hasError bool, message string, statusCode int) {
+	response := map[string]interface{}{
+		"domain": domain,
+		"err":    hasError,
+		"msg":    message,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	if jsonBytes, err := json.Marshal(response); err == nil {
+		w.Write(jsonBytes)
+	} else {
+		// Fallback to plain text if JSON marshaling fails
+		fmt.Fprintf(w, `{"domain":"%s","err":%t,"msg":"%s"}`, domain, hasError, message)
+	}
+}
+
+// writeErrorResponse writes an error response in JSON format
+func writeErrorResponse(w http.ResponseWriter, domain string, message string, statusCode int) {
+	writeJSONResponse(w, domain, true, message, statusCode)
+}
+
+// writeSuccessResponse writes a success response in JSON format
+func writeSuccessResponse(w http.ResponseWriter, domain string, message string) {
+	writeJSONResponse(w, domain, false, message, http.StatusOK)
+}
+
+// withTransaction handles database transaction with proper cleanup
+func withTransaction(db *sql.DB, fn func(*sql.Tx) error) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	if err := fn(tx); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	committed = true
+	return nil
+}
+
+// checkDomainExists checks if domain already exists in database
+func (a *App) checkDomainExists(domain string) (bool, error) {
+	var existingID int
+	err := a.DB.QueryRow("SELECT id FROM domains WHERE domain = ? AND deleted = 0", domain).Scan(&existingID)
+	if err == nil {
+		return true, nil // domain exists
+	}
+	if err != sql.ErrNoRows {
+		return false, err // database error
+	}
+	return false, nil // domain doesn't exist
+}
+
+// checkConfigFileExists checks if config file already exists
+func (a *App) checkConfigFileExists(domain string) (bool, error) {
+	filePath := a.domainFilePath(domain)
+	_, err := os.Stat(filePath)
+	if err == nil {
+		return true, nil // file exists
+	}
+	if !os.IsNotExist(err) {
+		return false, err // other error
+	}
+	return false, nil // file doesn't exist
+}
+
+// validateDomainRequest validates common domain request fields
+func (a *App) validateDomainRequest(req DomainRequest) (string, error) {
+	domain, err := normalizeDomain(req.Domain)
+	if err != nil {
+		return "", err
+	}
+
+	if err := validatePort(req.Port); err != nil {
+		return "", err
+	}
+
+	return domain, nil
+}
+
+// ============================================================================
+// TYPES AND CONSTANTS
+// ============================================================================
+
 type App struct {
 	DB             *sql.DB
 	CaddyConfigDir string
@@ -42,9 +145,13 @@ func NewApp(db *sql.DB, caddyConfigDir, caddyAPIURL, caddyfilePath string) *App 
 	}
 }
 
+// ============================================================================
+// MAIN HANDLER
+// ============================================================================
+
 func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST allowed", http.StatusMethodNotAllowed)
+		writeErrorResponse(w, "", "Only POST allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -53,19 +160,17 @@ func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	ct := r.Header.Get("Content-Type")
 	if strings.HasPrefix(ct, "multipart/form-data") {
 		if err := r.ParseMultipartForm(10 << 20); err != nil {
-			http.Error(w, "failed to parse multipart form: "+err.Error(), http.StatusBadRequest)
+			writeErrorResponse(w, "", "failed to parse multipart form: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		req.Action = r.FormValue("action")
-		req.Domain = r.FormValue("domain")
-		if p := r.FormValue("port"); p != "" {
-			if v, err := strconv.Atoi(p); err == nil {
-				req.Port = v
-			}
+		if req.Action == "import-caddyfile" {
+			a.handleImportCaddyfileAction(w, r)
+			return
 		}
 	} else {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeErrorResponse(w, "", err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
@@ -88,83 +193,73 @@ func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	case "reset-and-import-config-to-db":
 		a.handleResetAndImportConfigToDBAction(w)
 	default:
-		http.Error(w, "unknown action", http.StatusBadRequest)
+		writeErrorResponse(w, "", "unknown action", http.StatusBadRequest)
 	}
 }
+
+// ============================================================================
+// IMPORT HANDLERS
+// ============================================================================
 
 func (a *App) handleImportCaddyfileAction(w http.ResponseWriter, r *http.Request) {
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "file field is required: "+err.Error(), http.StatusBadRequest)
+		writeErrorResponse(w, "", "file field is required: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
 	contentBytes, err := io.ReadAll(file)
 	if err != nil {
-		http.Error(w, "failed to read uploaded file: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", "failed to read uploaded file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	filename := header.Filename
-	domain := filename
-	domain = strings.TrimSuffix(domain, ".caddy")
+	domain := strings.TrimSuffix(header.Filename, ".caddy")
+	domain = filepath.Base(domain)
 
 	domain, err = normalizeDomain(domain)
 	if err != nil {
-		http.Error(w, "invalid domain from filename: "+err.Error(), http.StatusBadRequest)
+		writeErrorResponse(w, "", "invalid domain from filename: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// attempt to detect port from content
 	_, port, perr := parseCaddyfileDomainAndPort(string(contentBytes))
 	if perr != nil {
-		http.Error(w, "failed to detect port from content: "+perr.Error(), http.StatusBadRequest)
+		writeErrorResponse(w, "", "failed to detect port from content: "+perr.Error(), http.StatusBadRequest)
 		return
 	}
 
 	filenamePath := a.domainFilePath(domain)
 
-	tx, err := a.DB.Begin()
-	if err != nil {
-		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback()
+	err = withTransaction(a.DB, func(tx *sql.Tx) error {
+		now := time.Now().UTC().Format(time.RFC3339)
+		_, err := tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, port, string(contentBytes), now, now, 0)
+		if err != nil {
+			return err
 		}
-	}()
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, port, string(contentBytes), now, now, 0)
+		if err := os.WriteFile(filenamePath, contentBytes, 0644); err != nil {
+			return err
+		}
+
+		if err := CaddyConfigUpdate(a.CaddyfilePath); err != nil {
+			_ = os.Remove(filenamePath)
+			return err
+		}
+
+		return nil
+	})
+
 	if err != nil {
 		status := http.StatusInternalServerError
 		if isUniqueConstraintError(err) {
 			status = http.StatusConflict
 		}
-		http.Error(w, "Failed to save to database: "+err.Error(), status)
+		writeErrorResponse(w, domain, "Failed to save to database: "+err.Error(), status)
 		return
 	}
-
-	if err := os.WriteFile(filenamePath, contentBytes, 0644); err != nil {
-		http.Error(w, "Failed to save file: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if err := CaddyConfigUpdate(a.CaddyfilePath); err != nil {
-		_ = os.Remove(filenamePath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		_ = os.Remove(filenamePath)
-		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	committed = true
 
 	writeSuccessResponse(w, domain, fmt.Sprintf("Imported Caddyfile for domain %s (port %d) and saved to %s", domain, port, filenamePath))
 }
@@ -182,7 +277,7 @@ type dbEntry struct {
 func (a *App) handleListDBWithContentAction(w http.ResponseWriter) {
 	rows, err := a.DB.Query("SELECT id, domain, port, content, created_at, updated_at, ssl FROM domains WHERE deleted = 0 ORDER BY domain")
 	if err != nil {
-		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -191,45 +286,48 @@ func (a *App) handleListDBWithContentAction(w http.ResponseWriter) {
 	for rows.Next() {
 		var e dbEntry
 		if err := rows.Scan(&e.ID, &e.Domain, &e.Port, &e.Content, &e.CreatedAt, &e.UpdatedAt, &e.SSL); err != nil {
-			http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+			writeErrorResponse(w, "", "Database error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	writeJSON(w, entries)
 }
 
+// ============================================================================
+// DOMAIN MANAGEMENT HANDLERS
+// ============================================================================
+
 func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
-	domain, err := normalizeDomain(req.Domain)
+	domain, err := a.validateDomainRequest(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := validatePort(req.Port); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeErrorResponse(w, "", err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	// Check if domain already exists in database (non-deleted)
-	var existingID int
-	err = a.DB.QueryRow("SELECT id FROM domains WHERE domain = ? AND deleted = 0", domain).Scan(&existingID)
-	if err == nil {
-		writeErrorResponse(w, domain, "Domain already exists", http.StatusConflict)
+	exists, err := a.checkDomainExists(domain)
+	if err != nil {
+		writeErrorResponse(w, domain, "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err != sql.ErrNoRows {
-		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+	if exists {
+		writeErrorResponse(w, domain, "Domain already exists", http.StatusConflict)
 		return
 	}
 
 	// Check if config file already exists
-	filePath := a.domainFilePath(domain)
-	if _, err := os.Stat(filePath); err == nil {
+	fileExists, err := a.checkConfigFileExists(domain)
+	if err != nil {
+		writeErrorResponse(w, domain, "File system error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if fileExists {
 		writeErrorResponse(w, domain, "Config file already exists", http.StatusConflict)
 		return
 	}
@@ -239,49 +337,31 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 		backendHost = GetBackendHost()
 	}
 	caddyfileContent := fmt.Sprintf("%s {\n\treverse_proxy %s:%d\n}\n", domain, backendHost, req.Port)
+	filePath := a.domainFilePath(domain)
 
-	tx, err := a.DB.Begin()
-	if err != nil {
-		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback()
+	err = withTransaction(a.DB, func(tx *sql.Tx) error {
+		now := time.Now().UTC().Format(time.RFC3339)
+		_, err := tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, req.Port, caddyfileContent, now, now, 0)
+		if err != nil {
+			return err
 		}
-	}()
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)", domain, req.Port, caddyfileContent, now, now, 0)
+		if err := os.WriteFile(filePath, []byte(caddyfileContent), 0644); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		http.Error(w, "Failed to save to database: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if err := os.WriteFile(filePath, []byte(caddyfileContent), 0644); err != nil {
-		http.Error(w, "Failed to save file: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if err := a.addDomainToCaddyAPI(domain, req.Port, backendHost); err != nil {
 		_ = os.Remove(filePath)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, domain, "Failed to save domain: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	if err := tx.Commit(); err != nil {
-		_ = os.Remove(filePath)
-		_ = a.removeDomainFromCaddyAPI(domain)
-		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	committed = true
 
 	// Add domain to Caddy API and verify it's working
 	if err := a.addDomainToCaddyAPI(domain, req.Port, backendHost); err != nil {
 		_ = os.Remove(filePath)
-		_ = tx.Rollback()
 		writeErrorResponse(w, domain, "Failed to add domain to Caddy: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -458,7 +538,7 @@ func (a *App) handleDeleteDomainAction(w http.ResponseWriter, req DomainRequest)
 func (a *App) handleListDomainsAction(w http.ResponseWriter) {
 	rows, err := a.DB.Query("SELECT domain, port FROM domains WHERE deleted = 0 ORDER BY domain")
 	if err != nil {
-		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -467,13 +547,13 @@ func (a *App) handleListDomainsAction(w http.ResponseWriter) {
 	for rows.Next() {
 		var e domainEntry
 		if err := rows.Scan(&e.Domain, &e.Port); err != nil {
-			http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+			writeErrorResponse(w, "", "Database error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -483,7 +563,7 @@ func (a *App) handleListDomainsAction(w http.ResponseWriter) {
 func (a *App) handleListCaddyDomainsAction(w http.ResponseWriter) {
 	routes, err := a.getCaddyRoutes()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -521,6 +601,10 @@ func (a *App) addDomainToCaddyAPI(domain string, port int, backendHost string) e
 
 	return nil
 }
+
+// ============================================================================
+// LIST HANDLERS
+// ============================================================================
 
 // verifyDomainWithRetry checks if a domain is accessible via HTTPS with retry logic
 func (a *App) verifyDomainWithRetry(domainURL string, interval time.Duration, maxRetries int) error {
@@ -572,101 +656,6 @@ func getStatusDescription(statusCode int) string {
 	}
 }
 
-// writeJSONResponse writes a consistent JSON response with domain, err, and msg fields
-func writeJSONResponse(w http.ResponseWriter, domain string, hasError bool, message string, statusCode int) {
-	response := map[string]interface{}{
-		"domain": domain,
-		"err":    hasError,
-		"msg":    message,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-
-	if jsonBytes, err := json.Marshal(response); err == nil {
-		w.Write(jsonBytes)
-	} else {
-		// Fallback to plain text if JSON marshaling fails
-		fmt.Fprintf(w, `{"domain":"%s","err":%t,"msg":"%s"}`, domain, hasError, message)
-	}
-}
-
-// writeErrorResponse writes an error response in JSON format
-func writeErrorResponse(w http.ResponseWriter, domain string, message string, statusCode int) {
-	writeJSONResponse(w, domain, true, message, statusCode)
-}
-
-// writeSuccessResponse writes a success response in JSON format
-func writeSuccessResponse(w http.ResponseWriter, domain string, message string) {
-	writeJSONResponse(w, domain, false, message, http.StatusOK)
-}
-
-// withTransaction handles database transaction with proper cleanup
-func withTransaction(db *sql.DB, fn func(*sql.Tx) error) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback()
-		}
-	}()
-
-	if err := fn(tx); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	committed = true
-	return nil
-}
-
-// checkDomainExists checks if domain already exists in database
-func (a *App) checkDomainExists(domain string) (bool, error) {
-	var existingID int
-	err := a.DB.QueryRow("SELECT id FROM domains WHERE domain = ? AND deleted = 0", domain).Scan(&existingID)
-	if err == nil {
-		return true, nil // domain exists
-	}
-	if err != sql.ErrNoRows {
-		return false, err // database error
-	}
-	return false, nil // domain doesn't exist
-}
-
-// checkConfigFileExists checks if config file already exists
-func (a *App) checkConfigFileExists(domain string) (bool, error) {
-	filePath := a.domainFilePath(domain)
-	_, err := os.Stat(filePath)
-	if err == nil {
-		return true, nil // file exists
-	}
-	if !os.IsNotExist(err) {
-		return false, err // other error
-	}
-	return false, nil // file doesn't exist
-}
-
-// validateDomainRequest validates common domain request fields
-func (a *App) validateDomainRequest(req DomainRequest) (string, error) {
-	domain, err := normalizeDomain(req.Domain)
-	if err != nil {
-		return "", err
-	}
-
-	if err := validatePort(req.Port); err != nil {
-		return "", err
-	}
-
-	return domain, nil
-}
-
 func (a *App) verifyDomainForCaddyfile(content string) error {
 	// Extract domain from content for verification
 	domainFromContent, _, err := parseCaddyfileDomainAndPort(content)
@@ -712,6 +701,10 @@ func extractDomainEntriesFromRoute(route map[string]interface{}) []domainEntry {
 
 	return entries
 }
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
 
 func (a *App) removeDomainFromCaddyAPI(domain string) error {
 	routes, err := a.getCaddyRoutes()
@@ -1047,67 +1040,61 @@ func isUniqueConstraintError(err error) bool {
 
 func (a *App) handleResetAndImportConfigToDBAction(w http.ResponseWriter) {
 	// Step 1: Update all domains to deleted = 1
-	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := a.DB.Exec("UPDATE domains SET deleted = 1, updated_at = ?", now)
+	err := withTransaction(a.DB, func(tx *sql.Tx) error {
+		now := time.Now().UTC().Format(time.RFC3339)
+		_, err := tx.Exec("UPDATE domains SET deleted = 1, updated_at = ?", now)
+		return err
+	})
+
 	if err != nil {
-		http.Error(w, "Failed to mark all domains as deleted: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", "Failed to mark all domains as deleted: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Step 2: Read all .caddy files from config directory
 	files, err := os.ReadDir(a.CaddyConfigDir)
 	if err != nil {
-		http.Error(w, "Failed to read config directory: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", "Failed to read config directory: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	importedCount := 0
-	tx, err := a.DB.Begin()
+	err = withTransaction(a.DB, func(tx *sql.Tx) error {
+		now := time.Now().UTC().Format(time.RFC3339)
+		for _, file := range files {
+			if !file.IsDir() && strings.HasSuffix(file.Name(), ".caddy") {
+				filePath := filepath.Join(a.CaddyConfigDir, file.Name())
+
+				// Read file content
+				content, err := os.ReadFile(filePath)
+				if err != nil {
+					continue // Skip files that can't be read
+				}
+
+				// Parse domain and port from content
+				domain, port, err := parseCaddyfileDomainAndPort(string(content))
+				if err != nil {
+					continue // Skip files that can't be parsed
+				}
+
+				// Insert into database
+				_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)",
+					domain, port, string(content), now, now, 0)
+				if err != nil {
+					continue // Skip duplicates and continue
+				}
+				importedCount++
+			}
+		}
+		return nil
+	})
+
 	if err != nil {
-		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "", "Failed to import configurations: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			tx.Rollback()
-		}
-	}()
 
-	for _, file := range files {
-		if !file.IsDir() && strings.HasSuffix(file.Name(), ".caddy") {
-			filePath := filepath.Join(a.CaddyConfigDir, file.Name())
-
-			// Read file content
-			content, err := os.ReadFile(filePath)
-			if err != nil {
-				continue // Skip files that can't be read
-			}
-
-			// Parse domain and port from content
-			domain, port, err := parseCaddyfileDomainAndPort(string(content))
-			if err != nil {
-				continue // Skip files that can't be parsed
-			}
-
-			// Insert into database
-			_, err = tx.Exec("INSERT INTO domains (domain, port, content, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)",
-				domain, port, string(content), now, now, 0)
-			if err != nil {
-				continue // Skip duplicates and continue
-			}
-			importedCount++
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	committed = true
-
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Successfully reset database and imported %d domain configurations", importedCount)
+	writeSuccessResponse(w, "", fmt.Sprintf("Successfully reset database and imported %d domain configurations", importedCount))
 }
 
 func writeJSON(w http.ResponseWriter, value interface{}) {
