@@ -30,7 +30,7 @@ sha256sum sp-caddy-manager_linux_arm64 >> checksums.txt
 
 echo "Build complete!"
 echo "Binaries created in bin/:"
-ls -la sp-caddy-manager_linux_*
+ls -la sp-caddy-manager_*
 echo ""
 echo "Checksums:"
 cat checksums.txt

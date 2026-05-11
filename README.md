@@ -81,6 +81,14 @@ chmod +x sp-caddy-manager_linux_arm64
 sudo mv sp-caddy-manager_linux_arm64 /usr/local/bin/sp-caddy-manager
 ```
 
+### Quick Install Script
+
+For automated installation, use the installer script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/siliconpin/sp-caddy-manager/master/install-sp-caddy-manager.sh | sudo bash
+```
+
 ### Build from Source
 
 ```bash
