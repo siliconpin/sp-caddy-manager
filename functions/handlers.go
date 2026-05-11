@@ -608,37 +608,26 @@ func (a *App) removeDomainFromCaddyAPI(domain string) error {
 		return err
 	}
 
-	newRoutes := routes[:0]
-	for _, route := range routes {
+	// Find and delete matching routes individually
+	for i, route := range routes {
 		if routeMatchesDomain(route, domain) {
-			continue
+			// Delete individual route by index
+			deleteURL := fmt.Sprintf("%s/%d", a.CaddyAPIURL, i)
+			req, err := http.NewRequest(http.MethodDelete, deleteURL, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create delete request: %v", err)
+			}
+
+			resp, err := a.HTTPClient.Do(req)
+			if err != nil {
+				return fmt.Errorf("failed to delete route: %v", err)
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode >= 400 {
+				return fmt.Errorf("Caddy route deletion failed: status %d", resp.StatusCode)
+			}
 		}
-		newRoutes = append(newRoutes, route)
-	}
-
-	jsonPayload, err := json.Marshal(newRoutes)
-	if err != nil {
-		return fmt.Errorf("failed to encode Caddy config: %v", err)
-	}
-
-	// Debug: log the payload being sent
-	fmt.Printf("Sending to Caddy API: %s\n", string(jsonPayload))
-
-	req, err := http.NewRequest(http.MethodPut, a.CaddyAPIURL, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return fmt.Errorf("failed to create Caddy config request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := a.HTTPClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to update Caddy config: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		// Read response body for more details
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Caddy config update failed: status %d, response: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
