@@ -584,6 +584,23 @@ func caddyDomainEntries(domain string) []map[string]interface{} {
 	}
 }
 
+// extractDomainEntriesFromRoute extracts domain entries from a Caddy route map
+func extractDomainEntriesFromRoute(route map[string]interface{}) []domainEntry {
+	var entries []domainEntry
+
+	hosts := routeHosts(route)
+	port := routePort(route)
+
+	for _, host := range hosts {
+		entries = append(entries, domainEntry{
+			Domain: host,
+			Port:   port,
+		})
+	}
+
+	return entries
+}
+
 func (a *App) removeDomainFromCaddyAPI(domain string) error {
 	routes, err := a.getCaddyRoutes()
 	if err != nil {

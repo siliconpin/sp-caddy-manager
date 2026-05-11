@@ -26,7 +26,7 @@ func TestCaddyDomainEntriesExtractsPortFromNestedSubroute(t *testing.T) {
 		},
 	}
 
-	entries := caddyDomainEntries(route)
+	entries := extractDomainEntriesFromRoute(route)
 	if len(entries) != 1 {
 		t.Fatalf("expected one domain entry, got %#v", entries)
 	}
@@ -51,7 +51,7 @@ func TestCaddyDomainEntriesExtractsPortFromLaterUpstream(t *testing.T) {
 		},
 	}
 
-	entries := caddyDomainEntries(route)
+	entries := extractDomainEntriesFromRoute(route)
 	if len(entries) != 1 {
 		t.Fatalf("expected one domain entry, got %#v", entries)
 	}
