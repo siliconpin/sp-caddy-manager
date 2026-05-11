@@ -280,8 +280,26 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 	}
 	committed = true
 
+	// Add domain to Caddy API and verify it's working
+	if err := a.addDomainToCaddyAPI(domain); err != nil {
+		_ = os.Remove(filePath)
+		_ = tx.Rollback()
+		http.Error(w, "Failed to add domain to Caddy: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Verify domain is accessible via HTTPS
+	domainURL := "https://" + domain
+	if err := a.verifyDomainWithRetry(domainURL, 2*time.Second, 5); err != nil {
+		_ = os.Remove(filePath)
+		_ = a.removeDomainFromCaddyAPI(domain)
+		_ = tx.Rollback()
+		http.Error(w, "Domain added to database but SSL verification failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Domain %s added successfully and saved to %s", domain, filePath)
+	fmt.Fprintf(w, "Domain %s added successfully and verified", domain)
 }
 
 func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest) {
@@ -315,6 +333,12 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 		return
 	}
 
+	// Verify domain is accessible via HTTPS before adding to database
+	if err := a.verifyDomainForCaddyfile(domain, req.Content); err != nil {
+		http.Error(w, "Domain verification failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	tx, err := a.DB.Begin()
 	if err != nil {
 		http.Error(w, "Failed to begin database transaction: "+err.Error(), http.StatusInternalServerError)
@@ -339,14 +363,34 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 		return
 	}
 
-	if err := CaddyConfigUpdate(a.CaddyfilePath); err != nil {
+	// Add domain to Caddy API
+	jsonPayload, err := json.Marshal(caddyDomainEntries(domain))
+	if err != nil {
 		_ = os.Remove(filename)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		_ = tx.Rollback()
+		http.Error(w, "Failed to marshal JSON: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := a.HTTPClient.Post(a.CaddyAPIURL, "application/json", bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		_ = os.Remove(filename)
+		_ = tx.Rollback()
+		http.Error(w, "Caddy API update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		_ = os.Remove(filename)
+		_ = tx.Rollback()
+		http.Error(w, "Caddy API update failed: status %d", resp.StatusCode)
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
 		_ = os.Remove(filename)
+		_ = a.removeDomainFromCaddyAPI(domain)
+		_ = tx.Rollback()
 		http.Error(w, "Failed to commit database transaction: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -469,24 +513,62 @@ func (a *App) addDomainToCaddyAPI(domain string, port int, backendHost string) e
 	if strings.TrimSpace(backendHost) == "" {
 		backendHost = GetBackendHost()
 	}
-	caddyRoute := map[string]interface{}{
-		"match": []map[string]interface{}{
-			{"host": []string{domain}},
-		},
-		"handle": []map[string]interface{}{
-			{
-				"handler": "reverse_proxy",
-				"upstreams": []map[string]string{
-					{"dial": fmt.Sprintf("%s:%d", backendHost, port)},
+}
+
+// verifyDomainWithRetry checks if a domain is accessible via HTTPS with retry logic
+func (a *App) verifyDomainWithRetry(domainURL string, interval time.Duration, maxRetries int) error {
+	for i := 0; i < maxRetries; i++ {
+		resp, err := http.Get(domainURL)
+		if err != nil {
+			if i == maxRetries-1 {
+				return fmt.Errorf("SSL failed after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(interval)
+			continue
+		}
+		
+		if resp.StatusCode == 200 {
+			resp.Body.Close()
+			return nil
+		}
+		
+		resp.Body.Close()
+		if i == maxRetries-1 {
+			return fmt.Errorf("SSL failed: domain returned status %d", resp.StatusCode)
+		}
+		time.Sleep(interval)
+	}
+	
+	return fmt.Errorf("SSL failed: max retries (%d) exceeded", maxRetries)
+}
+
+func (a *App) verifyDomainForCaddyfile(domain, content string) error {
+	// Extract domain from content for verification
+	domainFromContent, _, err := parseCaddyfileDomainAndPort(content)
+	if err != nil {
+		return fmt.Errorf("failed to parse domain from content: %v", err)
+	}
+	
+	domainURL := "https://" + domainFromContent
+	return a.verifyDomainWithRetry(domainURL, 2*time.Second, 5)
+}
+
+func caddyDomainEntries(domain string) []map[string]interface{} {
+	return []map[string]interface{}{
+		{
+			"match": []map[string]interface{}{
+				{"host": []string{domain}},
+			},
+			"handle": []map[string]interface{}{
+				{
+					"handler": "reverse_proxy",
+					"upstreams": []map[string]string{
+						{"dial": fmt.Sprintf("%s:%d", GetBackendHost(), 80)},
+					},
 				},
 			},
 		},
-		"terminal": true,
 	}
-
-	jsonPayload, err := json.Marshal(caddyRoute)
-	if err != nil {
-		return fmt.Errorf("failed to encode Caddy route: %v", err)
 	}
 
 	resp, err := a.HTTPClient.Post(a.CaddyAPIURL, "application/json", bytes.NewBuffer(jsonPayload))
