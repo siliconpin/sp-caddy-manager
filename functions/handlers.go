@@ -108,9 +108,7 @@ func (a *App) handleImportCaddyfileAction(w http.ResponseWriter, r *http.Request
 
 	filename := header.Filename
 	domain := filename
-	if strings.HasSuffix(domain, ".caddy") {
-		domain = strings.TrimSuffix(domain, ".caddy")
-	}
+	domain = strings.TrimSuffix(domain, ".caddy")
 
 	domain, err = normalizeDomain(domain)
 	if err != nil {

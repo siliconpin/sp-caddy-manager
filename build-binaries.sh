@@ -14,9 +14,9 @@ mkdir -p bin
 VERSION=$(cat VERSION 2>/dev/null || echo "unknown")
 echo "Version: $VERSION"
 
-# Build for AMD64 (with CGO enabled for SQLite support)
+# Build for AMD64 (without CGO for cross-compilation compatibility)
 echo "Building for Linux AMD64..."
-CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$VERSION" -o bin/sp-caddy-manager_linux_amd64 .
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$VERSION" -o bin/sp-caddy-manager_linux_amd64 .
 
 # Build for ARM64 (without CGO for cross-compilation)
 echo "Building for Linux ARM64..."
