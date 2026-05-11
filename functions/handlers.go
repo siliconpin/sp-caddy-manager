@@ -513,7 +513,10 @@ func (a *App) handleListCaddyDomainsAction(w http.ResponseWriter) {
 	for _, route := range routes {
 		// Extract domain from route for entries
 		domainFromRoute, portFromRoute := extractDomainFromRoute(route)
-		entries = append(entries, domainEntry{Domain: domainFromRoute, Port: portFromRoute})
+		// Only add entries with valid domains
+		if domainFromRoute != "" {
+			entries = append(entries, domainEntry{Domain: domainFromRoute, Port: portFromRoute})
+		}
 	}
 
 	writeJSON(w, entries)
