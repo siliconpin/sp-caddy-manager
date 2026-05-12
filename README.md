@@ -142,12 +142,12 @@ curl -X POST http://localhost:1011/manage-domain \
   -d '{"action":"add-caddyfile","content":"app.example.com {\n  reverse_proxy localhost:8080\n}"}'
 ```
 
-Import a `.caddy` file directly (multipart form upload). Filename should be like `sp-api.ns77.domain.com.caddy` — the domain is inferred from the filename:
+Import a `.caddy` file directly (multipart form upload). Filename should be like `sub.domain.com.caddy` — the domain is inferred from the filename:
 
 ```bash
 curl -X POST http://localhost:1011/manage-domain \
   -F action=import-caddyfile \
-  -F file=@sp-api.ns77.domain.com.caddy
+  -F file=@sub.domain.com.caddy
 ```
 
 List entries:

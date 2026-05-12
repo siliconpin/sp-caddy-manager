@@ -12,3 +12,5 @@ Done
 Still optional
 
 - Add authentication before exposing this service outside a trusted local network.
+
+use Port 1011 if .env not found (helpful on prod)
