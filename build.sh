@@ -1,34 +1,25 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Detect architecture
-ARCH=$(uname -m)
-case $ARCH in
-    x86_64)
-        ARCH_NAME="amd64"
-        ;;
-    aarch64)
-        ARCH_NAME="arm64"
-        ;;
-    *)
-        echo "Unsupported architecture: $ARCH"
-        exit 1
-        ;;
+APP="sp-caddy-manager"
+VERSION="$(cat VERSION 2>/dev/null || echo dev)"
+
+case "$(uname -m)" in
+    x86_64|amd64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    armv7l|armv6l) ARCH="arm" ;;
+    *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-OUTPUT="sp-caddy-manager-$ARCH_NAME"
+OUT="${BUILD_OUTPUT:-dist/${APP}_linux_${ARCH}}"
+mkdir -p "$(dirname "$OUT")"
 
-# Get version from VERSION file or use default
-VERSION=$(cat VERSION 2>/dev/null || echo "dev")
-echo "Version: $VERSION"
+echo "Building ${APP} ${VERSION} for linux/${ARCH} -> ${OUT}"
 
-echo "Building for $ARCH_NAME..."
-# Build natively for current architecture
-export GOTOOLCHAIN=local
-go build -ldflags "-X main.version=$VERSION" -buildvcs=false -o "$OUTPUT"
+GOOS=linux \
+GOARCH="$ARCH" \
+CGO_ENABLED="${CGO_ENABLED:-1}" \
+GOTOOLCHAIN="${GOTOOLCHAIN:-local}" \
+go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${VERSION}" -o "$OUT" .
 
-if [ $? -eq 0 ]; then
-    echo "Build successful: $OUTPUT"
-else
-    echo "Build failed"
-    exit 1
-fi
+echo "Build successful: ${OUT}"

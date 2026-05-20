@@ -119,8 +119,10 @@ curl -fsSL https://raw.githubusercontent.com/siliconpin/sp-caddy-manager/master/
 ### Build from Source
 
 ```bash
-./build-binaries.sh
+./build.sh
 ```
+
+The script builds a Linux binary for the current machine architecture. Set `BUILD_OUTPUT` if you want a different output path.
 
 Or directly:
 

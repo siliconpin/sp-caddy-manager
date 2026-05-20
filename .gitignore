@@ -2,3 +2,4 @@
 sp-caddy-manager*
 domains.sqlite
 bin/
+dist/
