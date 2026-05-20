@@ -46,7 +46,13 @@ BACKEND_HOST=0.0.0.0
 go run .
 ```
 
-Open:
+Run in development UI mode:
+
+```bash
+go run . dev
+```
+
+Open in development UI mode:
 
 ```text
 http://localhost:1011/

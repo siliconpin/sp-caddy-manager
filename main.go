@@ -24,6 +24,7 @@ func main() {
 	if handleCLI(os.Args[1:]) {
 		return
 	}
+	devMode := isDevMode(os.Args[1:])
 
 	port := functions.GetPortFromEnv()
 	caddyConfigDir := functions.GetCaddyConfigDir()
@@ -88,7 +89,7 @@ func main() {
 
 	actualPort := listener.Addr().(*net.TCPAddr).Port
 	fmt.Printf("Server starting on :%d...\n", actualPort)
-	log.Fatal(http.Serve(listener, newRouter(app)))
+	log.Fatal(http.Serve(listener, newRouter(app, devMode)))
 }
 
 func handleCLI(args []string) bool {
@@ -158,11 +159,17 @@ func handleKeyCLI(args []string) {
 	}
 }
 
-func newRouter(app *functions.App) http.Handler {
+func isDevMode(args []string) bool {
+	return len(args) == 1 && args[0] == "dev"
+}
+
+func newRouter(app *functions.App, serveHTML bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth", app.HandleAuth)
 	mux.HandleFunc("/manage-domain", app.HandleManageDomain)
-	mux.Handle("/", http.FileServer(http.Dir("./html")))
+	if serveHTML {
+		mux.Handle("/", http.FileServer(http.Dir("./html")))
+	}
 	return mux
 }
 
