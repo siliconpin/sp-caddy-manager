@@ -19,13 +19,11 @@ import (
 var version = "dev"
 
 func main() {
-	// Check for --version flag
-	if len(os.Args) > 1 && os.Args[1] == "--version" {
-		fmt.Println(version)
+	functions.LoadDotEnv(".env")
+
+	if handleCLI(os.Args[1:]) {
 		return
 	}
-
-	functions.LoadDotEnv(".env")
 
 	port := functions.GetPortFromEnv()
 	caddyConfigDir := functions.GetCaddyConfigDir()
@@ -93,8 +91,76 @@ func main() {
 	log.Fatal(http.Serve(listener, newRouter(app)))
 }
 
+func handleCLI(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+
+	switch args[0] {
+	case "-v", "--version", "version":
+		fmt.Println(version)
+		return true
+	case "key":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: sp-caddy-manager key <add|list|delete> [label]")
+			os.Exit(2)
+		}
+		handleKeyCLI(args[1:])
+		return true
+	default:
+		return false
+	}
+}
+
+func handleKeyCLI(args []string) {
+	store := functions.NewAPIKeyStore(functions.GetAPIKeyDir())
+
+	switch args[0] {
+	case "add":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: sp-caddy-manager key add <label>")
+			os.Exit(2)
+		}
+		key, path, err := store.Add(args[1])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "failed to add key:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("label: %s\n", args[1])
+		fmt.Printf("key: %s\n", key)
+		fmt.Printf("file: %s\n", path)
+	case "list":
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "usage: sp-caddy-manager key list")
+			os.Exit(2)
+		}
+		labels, err := store.List()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "failed to list keys:", err)
+			os.Exit(1)
+		}
+		for _, label := range labels {
+			fmt.Println(label)
+		}
+	case "delete":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "usage: sp-caddy-manager key delete <label>")
+			os.Exit(2)
+		}
+		if err := store.Delete(args[1]); err != nil {
+			fmt.Fprintln(os.Stderr, "failed to delete key:", err)
+			os.Exit(1)
+		}
+		fmt.Printf("deleted: %s\n", args[1])
+	default:
+		fmt.Fprintln(os.Stderr, "usage: sp-caddy-manager key <add|list|delete> [label]")
+		os.Exit(2)
+	}
+}
+
 func newRouter(app *functions.App) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/auth", app.HandleAuth)
 	mux.HandleFunc("/manage-domain", app.HandleManageDomain)
 	mux.Handle("/", http.FileServer(http.Dir("./html")))
 	return mux

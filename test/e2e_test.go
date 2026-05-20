@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,12 +34,21 @@ func TestE2E_AddDeleteList(t *testing.T) {
 	if err := os.Mkdir(caddyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	binDir := filepath.Join(tmp, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeCaddy := filepath.Join(binDir, "caddy")
+	if err := os.WriteFile(fakeCaddy, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	caddyRoutes := make([]map[string]interface{}, 0)
 	caddyMu := make(chan struct{}, 1)
 	caddyMu <- struct{}{}
 
 	caddyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/config/apps/http/servers/srv0/routes" {
+		const routesPath = "/config/apps/http/servers/srv0/routes"
+		if r.URL.Path != routesPath && !strings.HasPrefix(r.URL.Path, routesPath+"/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -65,6 +76,15 @@ func TestE2E_AddDeleteList(t *testing.T) {
 			}
 			caddyRoutes = routes
 			w.WriteHeader(http.StatusOK)
+		case http.MethodDelete:
+			idxStr := strings.TrimPrefix(r.URL.Path, routesPath+"/")
+			idx, err := strconv.Atoi(idxStr)
+			if err != nil || idx < 0 || idx >= len(caddyRoutes) {
+				http.NotFound(w, r)
+				return
+			}
+			caddyRoutes = append(caddyRoutes[:idx], caddyRoutes[idx+1:]...)
+			w.WriteHeader(http.StatusOK)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -72,6 +92,14 @@ func TestE2E_AddDeleteList(t *testing.T) {
 	defer caddyServer.Close()
 
 	dbPath := filepath.Join(tmp, "domains.sqlite")
+	keyDir := filepath.Join(tmp, "keys")
+	if err := os.Mkdir(keyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(keyDir, "test.key"), []byte("test-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	appCmd := exec.Command(binPath)
 	appCmd.Dir = ".."
 	appCmd.Env = append(os.Environ(),
@@ -79,6 +107,9 @@ func TestE2E_AddDeleteList(t *testing.T) {
 		"DB_PATH="+dbPath,
 		"CADDY_CONFIG_DIR="+caddyDir,
 		"CADDY_API_URL="+caddyServer.URL+"/config/apps/http/servers/srv0/routes",
+		"API_KEY_DIR="+keyDir,
+		"VERIFY_DOMAIN_SSL=false",
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 
 	stdout, err := appCmd.StdoutPipe()
@@ -204,7 +235,14 @@ func postJSON(t *testing.T, url string, body interface{}) *http.Response {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payload))
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "test-secret")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

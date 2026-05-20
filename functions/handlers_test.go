@@ -1,10 +1,14 @@
 package functions
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -179,6 +183,143 @@ func TestHandleManageDomain_MethodNotAllowed(t *testing.T) {
 
 	if response["err"] != true {
 		t.Errorf("Expected err true, got %v", response["err"])
+	}
+}
+
+func TestHandleManageDomain_NoConfiguredKeys(t *testing.T) {
+	db := setupTestDB(t)
+	app := &App{
+		DB:      db,
+		APIKeys: NewAPIKeyStore(t.TempDir()),
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/manage-domain", bytes.NewBufferString(`{"action":"list-db"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	app.HandleManageDomain(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusServiceUnavailable, w.Code, w.Body.String())
+	}
+}
+
+func TestHandleManageDomain_MissingAPIKey(t *testing.T) {
+	db := setupTestDB(t)
+	app := newAuthTestApp(t, db, "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/manage-domain", bytes.NewBufferString(`{"action":"list-db"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	app.HandleManageDomain(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+	}
+}
+
+func TestHandleManageDomain_InvalidAPIKey(t *testing.T) {
+	db := setupTestDB(t)
+	app := newAuthTestApp(t, db, "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/manage-domain", bytes.NewBufferString(`{"action":"list-db"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "wrong")
+	w := httptest.NewRecorder()
+
+	app.HandleManageDomain(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+	}
+}
+
+func TestHandleManageDomain_ValidAPIKey(t *testing.T) {
+	db := setupTestDB(t)
+	app := newAuthTestApp(t, db, "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/manage-domain", bytes.NewBufferString(`{"action":"list-db"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "secret")
+	w := httptest.NewRecorder()
+
+	app.HandleManageDomain(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+}
+
+func TestHandleAuth_ValidatesLabelAndKeyValue(t *testing.T) {
+	db := setupTestDB(t)
+	app := newAuthTestApp(t, db, "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBufferString(`{"label":"test","key_value":"secret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	app.HandleAuth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, w.Code, w.Body.String())
+	}
+}
+
+func TestHandleAuth_RejectsWrongKeyValue(t *testing.T) {
+	db := setupTestDB(t)
+	app := newAuthTestApp(t, db, "secret")
+
+	req := httptest.NewRequest(http.MethodPost, "/auth", bytes.NewBufferString(`{"label":"test","key_value":"wrong"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	app.HandleAuth(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusUnauthorized, w.Code, w.Body.String())
+	}
+}
+
+func TestAPIKeyStoreAddStoresHash(t *testing.T) {
+	store := NewAPIKeyStore(t.TempDir())
+	key, path, err := store.Add("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stored := strings.TrimSpace(string(content))
+	if stored == key {
+		t.Fatalf("expected key file to store a hash, got raw key")
+	}
+	if !strings.HasPrefix(stored, "sha256:") {
+		t.Fatalf("expected sha256 hash, got %q", stored)
+	}
+	ok, err := store.Valid(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatalf("expected generated key to validate")
+	}
+}
+
+func newAuthTestApp(t *testing.T, db *sql.DB, key string) *App {
+	t.Helper()
+
+	keyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(keyDir, "test.key"), []byte(hashAPIKey(key)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	return &App{
+		DB:      db,
+		APIKeys: NewAPIKeyStore(keyDir),
 	}
 }
 

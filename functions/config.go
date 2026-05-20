@@ -2,6 +2,7 @@ package functions
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -28,6 +29,17 @@ func GetCaddyAPIURL() string {
 
 func GetCaddyfilePath() string {
 	return GetEnvDefault("CADDYFILE_PATH", "/etc/caddy/Caddyfile")
+}
+
+func GetAPIKeyDir() string {
+	if val := os.Getenv("API_KEY_DIR"); val != "" {
+		return val
+	}
+	exePath, err := os.Executable()
+	if err == nil {
+		return filepath.Join(filepath.Dir(exePath), "keys")
+	}
+	return "./keys"
 }
 
 func LoadDotEnv(path string) {
@@ -63,7 +75,7 @@ func LoadDotEnv(path string) {
 func GetPortFromEnv() int {
 	portStr := os.Getenv("PORT")
 	if portStr == "" {
-		return 3000
+		return 1011
 	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
@@ -74,4 +86,9 @@ func GetPortFromEnv() int {
 
 func GetBackendHost() string {
 	return GetEnvDefault("BACKEND_HOST", "0.0.0.0")
+}
+
+func GetVerifyDomainSSL() bool {
+	value := strings.ToLower(strings.TrimSpace(GetEnvDefault("VERIFY_DOMAIN_SSL", "true")))
+	return value != "false" && value != "0" && value != "no"
 }

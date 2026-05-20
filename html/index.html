@@ -14,6 +14,10 @@
     input, button { font-size: 15px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
     button { background: #2563eb; color: #fff; cursor: pointer; border: none; }
     button:hover { background: #1d4ed8; }
+    .hidden { display: none; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .secondary { background: #475569; }
+    .secondary:hover { background: #334155; }
     .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
     .status { font-family: monospace; white-space: pre-wrap; background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #cbd5e1; }
     .list-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin-top: 14px; }
@@ -27,10 +31,32 @@
 </head>
 <body>
   <header>
-    <h1>SP Caddy Manager</h1>
-    <p>Use this UI to test APIs and view domains/ports stored in SQLite.</p>
+    <div class="topbar">
+      <div>
+        <h1>SP Caddy Manager</h1>
+        <p>Use this UI to test APIs and view domains/ports stored in SQLite.</p>
+      </div>
+      <button id="logoutButton" class="secondary hidden" type="button">Logout</button>
+    </div>
   </header>
   <main>
+    <section id="loginSection">
+      <h2>Enter API Key</h2>
+      <form id="loginForm">
+        <label>
+          Key label
+          <input type="text" id="keyLabel" placeholder="key1" autocomplete="username" required />
+        </label>
+        <label>
+          Key value
+          <input type="password" id="keyValue" placeholder="Generated key" autocomplete="current-password" required />
+        </label>
+        <button type="submit">Unlock</button>
+      </form>
+      <div id="loginResult" class="status">Enter a key label and key value to continue.</div>
+    </section>
+
+    <div id="appShell" class="hidden">
     <section>
       <h2>Add Domain</h2>
       <form id="addForm">
@@ -73,9 +99,17 @@
         </div>
       </div>
     </section>
+    </div>
   </main>
 
   <script>
+    const loginSection = document.getElementById('loginSection');
+    const loginForm = document.getElementById('loginForm');
+    const keyLabel = document.getElementById('keyLabel');
+    const keyValue = document.getElementById('keyValue');
+    const loginResult = document.getElementById('loginResult');
+    const appShell = document.getElementById('appShell');
+    const logoutButton = document.getElementById('logoutButton');
     const addForm = document.getElementById('addForm');
     const deleteForm = document.getElementById('deleteForm');
     const addResult = document.getElementById('addResult');
@@ -85,6 +119,12 @@
     const caddyDomainsList = document.getElementById('caddyDomainsList');
 
     const show = (el, text) => { el.textContent = text; };
+    const getAPIKey = () => sessionStorage.getItem('sp-caddy-manager-api-key') || '';
+    const setUnlocked = unlocked => {
+      loginSection.classList.toggle('hidden', unlocked);
+      appShell.classList.toggle('hidden', !unlocked);
+      logoutButton.classList.toggle('hidden', !unlocked);
+    };
     const escapeHtml = value => String(value)
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
@@ -95,7 +135,7 @@
     const request = async body => {
       const resp = await fetch('/manage-domain', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': getAPIKey() },
         body: JSON.stringify(body)
       });
       const text = await resp.text();
@@ -105,7 +145,7 @@
     const requestJSON = async body => {
       const resp = await fetch('/manage-domain', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-API-Key': getAPIKey() },
         body: JSON.stringify(body)
       });
       if (!resp.ok) {
@@ -144,6 +184,45 @@
       }
     };
 
+    const authenticate = async (label, key) => {
+      const resp = await fetch('/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, key_value: key })
+      });
+      const text = await resp.text();
+      if (!resp.ok) {
+        throw new Error(`ERROR ${resp.status}: ${text}`);
+      }
+      return text;
+    };
+
+    loginForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const label = keyLabel.value.trim();
+      const key = keyValue.value.trim();
+      if (!label || !key) {
+        show(loginResult, 'Key label and key value are required.');
+        return;
+      }
+
+      try {
+        await authenticate(label, key);
+        sessionStorage.setItem('sp-caddy-manager-api-key', key);
+        keyValue.value = '';
+        setUnlocked(true);
+        refreshDomains();
+      } catch (err) {
+        show(loginResult, err.message);
+      }
+    });
+
+    logoutButton.addEventListener('click', () => {
+      sessionStorage.removeItem('sp-caddy-manager-api-key');
+      setUnlocked(false);
+      show(loginResult, 'Enter a key label and key value to continue.');
+    });
+
     addForm.addEventListener('submit', async event => {
       event.preventDefault();
       const domain = document.getElementById('addDomain').value.trim();
@@ -170,7 +249,12 @@
     });
 
     refreshButton.addEventListener('click', refreshDomains);
-    window.addEventListener('load', refreshDomains);
+    window.addEventListener('load', () => {
+      if (getAPIKey()) {
+        setUnlocked(true);
+        refreshDomains();
+      }
+    });
   </script>
 </body>
 </html>

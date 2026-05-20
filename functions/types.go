@@ -7,3 +7,8 @@ type DomainRequest struct {
 	Content     string `json:"content"`
 	BackendHost string `json:"backend_host"`
 }
+
+type AuthRequest struct {
+	Label    string `json:"label"`
+	KeyValue string `json:"key_value"`
+}

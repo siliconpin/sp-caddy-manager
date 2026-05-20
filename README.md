@@ -31,6 +31,7 @@ DB_PATH=./domains.sqlite
 CADDY_CONFIG_DIR=/etc/caddy/conf.d
 CADDY_API_URL=http://localhost:2019/config/apps/http/servers/srv0/routes
 CADDYFILE_PATH=/etc/caddy/Caddyfile
+API_KEY_DIR=/usr/local/bin/keys
 ```
 
 You can also set the backend host Caddy should dial (default `0.0.0.0`):
@@ -50,6 +51,26 @@ Open:
 ```text
 http://localhost:1011/
 ```
+
+## Version And API Keys
+
+Show the installed version:
+
+```bash
+/usr/local/bin/sp-caddy-manager -v
+```
+
+Create, list, and delete API keys:
+
+```bash
+/usr/local/bin/sp-caddy-manager key add key1
+/usr/local/bin/sp-caddy-manager key list
+/usr/local/bin/sp-caddy-manager key delete key1
+```
+
+`key add <label>` prints the generated key once and creates a text file in `API_KEY_DIR` containing a SHA-256 hash of that key. If `API_KEY_DIR` is not set, keys are stored in a `keys` directory next to the `sp-caddy-manager` binary.
+
+The web UI at `/` asks for the key label and key value before showing management controls.
 
 ## Installation
 
@@ -110,6 +131,7 @@ Domains must be valid hostnames, and ports must be in `1-65535`.
 ```bash
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <key>" \
   -d '{"action":"add","domain":"app.example.com","port":8080}'
 ```
 
@@ -118,6 +140,7 @@ Override the backend host for a single request by including `backend_host` in th
 ```bash
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <key>" \
   -d '{"action":"add","domain":"app.example.com","port":8080,"backend_host":"10.0.0.140"}'
 ```
 
@@ -126,10 +149,12 @@ Delete a domain:
 ```bash
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <key>" \
   -d '{"action":"delete","domain":"app.example.com"}'
 
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <key>" \
   -d '{"action":"reset-and-import-config-to-db"}'
 
 ```
@@ -139,6 +164,7 @@ Add raw Caddyfile content:
 ```bash
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <key>" \
   -d '{"action":"add-caddyfile","content":"app.example.com {\n  reverse_proxy localhost:8080\n}"}'
 ```
 
@@ -146,6 +172,7 @@ Import a `.caddy` file directly (multipart form upload). Filename should be like
 
 ```bash
 curl -X POST http://localhost:1011/manage-domain \
+  -H "X-API-Key: <key>" \
   -F action=import-caddyfile \
   -F file=@sub.domain.com.caddy
 ```
@@ -155,14 +182,17 @@ List entries:
 ```bash
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <key>" \
   -d '{"action":"list-db"}'
 
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <key>" \
   -d '{"action":"list-db-with-content"}'
 
 curl -X POST http://localhost:1011/manage-domain \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: <key>" \
   -d '{"action":"list-caddy"}'
 ```
 

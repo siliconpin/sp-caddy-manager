@@ -128,6 +128,7 @@ type App struct {
 	CaddyAPIURL    string
 	CaddyfilePath  string
 	HTTPClient     *http.Client
+	APIKeys        *APIKeyStore
 }
 
 type domainEntry struct {
@@ -142,6 +143,7 @@ func NewApp(db *sql.DB, caddyConfigDir, caddyAPIURL, caddyfilePath string) *App 
 		CaddyAPIURL:    caddyAPIURL,
 		CaddyfilePath:  caddyfilePath,
 		HTTPClient:     &http.Client{Timeout: caddyRequestTimeout},
+		APIKeys:        NewAPIKeyStore(GetAPIKeyDir()),
 	}
 }
 
@@ -152,6 +154,9 @@ func NewApp(db *sql.DB, caddyConfigDir, caddyAPIURL, caddyfilePath string) *App 
 func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErrorResponse(w, "", "Only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !a.authorizeAPIKey(w, r) {
 		return
 	}
 
@@ -195,6 +200,67 @@ func (a *App) HandleManageDomain(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErrorResponse(w, "", "unknown action", http.StatusBadRequest)
 	}
+}
+
+func (a *App) HandleAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErrorResponse(w, "", "Only POST allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if a.APIKeys == nil {
+		writeErrorResponse(w, "", "API key store is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req AuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorResponse(w, "", err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ok, err := a.APIKeys.ValidForLabel(req.Label, req.KeyValue)
+	if err != nil {
+		writeErrorResponse(w, "", err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !ok {
+		writeErrorResponse(w, "", "Invalid key label or key value", http.StatusUnauthorized)
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"err": false,
+		"msg": "Authenticated",
+	})
+}
+
+func (a *App) authorizeAPIKey(w http.ResponseWriter, r *http.Request) bool {
+	if a.APIKeys == nil {
+		writeErrorResponse(w, "", "API key store is not configured", http.StatusServiceUnavailable)
+		return false
+	}
+
+	hasKeys, err := a.APIKeys.HasKeys()
+	if err != nil {
+		writeErrorResponse(w, "", "API key store error: "+err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	if !hasKeys {
+		writeErrorResponse(w, "", "No API keys configured. Run: sp-caddy-manager key add <label>", http.StatusServiceUnavailable)
+		return false
+	}
+
+	ok, err := a.APIKeys.Valid(r.Header.Get("X-API-Key"))
+	if err != nil {
+		writeErrorResponse(w, "", "API key store error: "+err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	if !ok {
+		writeErrorResponse(w, "", "Invalid or missing API key", http.StatusUnauthorized)
+		return false
+	}
+
+	return true
 }
 
 // ============================================================================
@@ -366,14 +432,16 @@ func (a *App) handleAddDomainAction(w http.ResponseWriter, req DomainRequest) {
 		return
 	}
 
-	// Wait a bit for Caddy to start SSL certificate process
-	time.Sleep(5 * time.Second)
+	if GetVerifyDomainSSL() {
+		// Wait a bit for Caddy to start SSL certificate process.
+		time.Sleep(5 * time.Second)
 
-	// Verify domain is accessible via HTTPS
-	domainURL := "https://" + domain
-	if err := a.verifyDomainWithRetry(domainURL, 4*time.Second, 16); err != nil {
-		writeErrorResponse(w, domain, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
-		return
+		// Verify domain is accessible via HTTPS.
+		domainURL := "https://" + domain
+		if err := a.verifyDomainWithRetry(domainURL, 4*time.Second, 16); err != nil {
+			writeErrorResponse(w, domain, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	writeSuccessResponse(w, domain, "Domain added successfully and verified")
@@ -413,10 +481,12 @@ func (a *App) handleAddCaddyfileAction(w http.ResponseWriter, req DomainRequest)
 		return
 	}
 
-	// Verify domain is accessible via HTTPS before adding to database
-	if err := a.verifyDomainForCaddyfile(req.Content); err != nil {
-		writeErrorResponse(w, domain, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
-		return
+	if GetVerifyDomainSSL() {
+		// Verify domain is accessible via HTTPS before adding to database.
+		if err := a.verifyDomainForCaddyfile(req.Content); err != nil {
+			writeErrorResponse(w, domain, "Domain added to database but SSL failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	filename := a.domainFilePath(domain)
@@ -597,6 +667,32 @@ func (a *App) addDomainToCaddyAPI(domain string, port int, backendHost string) e
 	// Reload Caddy configuration
 	if err := CaddyConfigUpdate(a.CaddyfilePath); err != nil {
 		return fmt.Errorf("failed to reload Caddy: %v", err)
+	}
+
+	route := map[string]interface{}{
+		"match": []map[string]interface{}{
+			{"host": []string{domain}},
+		},
+		"handle": []map[string]interface{}{
+			{
+				"handler": "reverse_proxy",
+				"upstreams": []map[string]string{
+					{"dial": fmt.Sprintf("%s:%d", backendHost, port)},
+				},
+			},
+		},
+	}
+	jsonPayload, err := json.Marshal(route)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Caddy route: %v", err)
+	}
+	resp, err := a.HTTPClient.Post(a.CaddyAPIURL, "application/json", bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return fmt.Errorf("failed to add Caddy route: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("Caddy route add failed: status %d", resp.StatusCode)
 	}
 
 	return nil

@@ -80,6 +80,7 @@ CADDY_CONFIG_DIR=/etc/caddy/conf.d
 CADDY_API_URL=http://localhost:2019/config/apps/http/servers/srv0/routes
 CADDYFILE_PATH=/etc/caddy/Caddyfile
 BACKEND_HOST=0.0.0.0
+API_KEY_DIR=${INSTALL_DIR}/keys
 EOF
 
 echo "Setting permissions for .env file..."
