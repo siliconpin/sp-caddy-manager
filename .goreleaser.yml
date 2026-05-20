@@ -4,20 +4,15 @@ project_name: sp-caddy-manager
 builds:
   - main: .
     binary: sp-caddy-manager
+    env:
+      - CGO_ENABLED=0
     goos:
       - linux
     goarch:
       - amd64
       - arm64
-    overrides:
-      - goos: linux
-        goarch: amd64
-        env:
-          - CGO_ENABLED=1
-      - goos: linux
-        goarch: arm64
-        env:
-          - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
 
 archives:
   - format: binary

@@ -9,6 +9,22 @@ GITHUB_REPO="siliconpin/sp-caddy-manager"
 INSTALL_DIR="/usr/local/bin"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 
+install_binary() {
+    local download_url="$1"
+    local tmp_binary="/tmp/${APP_NAME}"
+
+    echo "Downloading from: ${download_url}"
+    curl -fL "${download_url}" -o "${tmp_binary}"
+    chmod +x "${tmp_binary}"
+
+    echo "Validating downloaded binary..."
+    "${tmp_binary}" --version >/dev/null
+
+    echo "Installing binary to ${INSTALL_DIR}..."
+    sudo mv "${tmp_binary}" "${INSTALL_DIR}/${APP_NAME}"
+    sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+}
+
 echo "Checking system architecture..."
 ARCH=$(uname -m)
 
@@ -43,33 +59,18 @@ if command -v "${APP_NAME}" &> /dev/null; then
         else
             echo "Updating to version $LATEST_RELEASE..."
             DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
-            
-            echo "Downloading from: ${DOWNLOAD_URL}"
-            curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
-            echo "Updating binary to ${INSTALL_DIR}..."
-            sudo mv "/tmp/${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
-            sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+            install_binary "${DOWNLOAD_URL}"
             echo "Update completed successfully!"
         fi
     else
         echo "Cannot determine current version. Reinstalling..."
         DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
-        
-        echo "Downloading from: ${DOWNLOAD_URL}"
-        curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
-        echo "Installing binary to ${INSTALL_DIR}..."
-        sudo mv "/tmp/${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
-        sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+        install_binary "${DOWNLOAD_URL}"
     fi
 else
     echo "Installing ${APP_NAME} version $LATEST_RELEASE..."
     DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
-    
-    echo "Downloading from: ${DOWNLOAD_URL}"
-    curl -L "${DOWNLOAD_URL}" -o "/tmp/${APP_NAME}"
-    echo "Installing binary to ${INSTALL_DIR}..."
-    sudo mv "/tmp/${APP_NAME}" "${INSTALL_DIR}/${APP_NAME}"
-    sudo chmod +x "${INSTALL_DIR}/${APP_NAME}"
+    install_binary "${DOWNLOAD_URL}"
 fi
 
 echo "Creating .env file..."
