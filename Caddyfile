@@ -11,4 +11,4 @@
 :80 {
     redir https://siliconpin.com{uri}
 }
-import conf.d/*.conf
+import conf.d/*.caddy

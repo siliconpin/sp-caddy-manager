@@ -88,6 +88,14 @@ echo "Setting permissions for .env file..."
 sudo chmod 644 ${INSTALL_DIR}/.env
 sudo chown root:root ${INSTALL_DIR}/.env
 
+echo "Ensuring Caddy snippet directory and placeholder..."
+sudo mkdir -p /etc/caddy/conf.d
+sudo bash -c "cat > /etc/caddy/conf.d/empty.caddy" <<EOF
+# sp-caddy-manager placeholder
+EOF
+sudo chmod 755 /etc/caddy /etc/caddy/conf.d
+sudo chmod 644 /etc/caddy/conf.d/empty.caddy
+
 echo "Creating systemd service..."
 sudo bash -c "cat > ${SERVICE_FILE}" <<EOF
 [Unit]

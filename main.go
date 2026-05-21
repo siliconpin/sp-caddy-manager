@@ -18,6 +18,8 @@ import (
 
 var version = "dev"
 
+const placeholderCaddyfileContent = "# sp-caddy-manager placeholder\n"
+
 func main() {
 	functions.LoadDotEnv(".env")
 
@@ -38,17 +40,19 @@ func main() {
 		log.Printf("INFO: caddy command is available at: %s", strings.TrimSpace(string(out)))
 	}
 
-	if err := os.MkdirAll(caddyConfigDir, 0744); err != nil {
+	if err := os.MkdirAll(caddyConfigDir, 0755); err != nil {
 		log.Fatalf("Failed to create caddy config directory: %v", err)
 	}
 	log.Printf("INFO: Caddy config directory ensured: %s", caddyConfigDir)
 
-	emptyFileName := filepath.Join(caddyConfigDir, "empty.caddy")
-	if _, err := os.Stat(emptyFileName); os.IsNotExist(err) {
-		if err := os.WriteFile(emptyFileName, []byte("\n"), 0744); err != nil {
-			log.Fatalf("Failed to create empty.caddy file: %v", err)
-		}
-		log.Printf("INFO: Created empty.caddy file at %s", emptyFileName)
+	placeholderPath := filepath.Join(caddyConfigDir, "empty.caddy")
+	if err := ensurePlaceholderCaddyfile(placeholderPath); err != nil {
+		log.Fatalf("Failed to ensure empty.caddy placeholder: %v", err)
+	}
+	log.Printf("INFO: Caddy placeholder ensured: %s", placeholderPath)
+
+	if err := os.Chmod(caddyConfigDir, 0755); err != nil {
+		log.Printf("WARNING: Could not set permissions on caddy config directory %s: %v", caddyConfigDir, err)
 	}
 
 	checkCaddyfileImport(caddyfilePath, caddyConfigDir)
@@ -90,6 +94,18 @@ func main() {
 	actualPort := listener.Addr().(*net.TCPAddr).Port
 	fmt.Printf("Server starting on :%d...\n", actualPort)
 	log.Fatal(http.Serve(listener, newRouter(app, devMode)))
+}
+
+func ensurePlaceholderCaddyfile(path string) error {
+	data, err := os.ReadFile(path)
+	if err == nil && strings.TrimSpace(string(data)) != "" {
+		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	return os.WriteFile(path, []byte(placeholderCaddyfileContent), 0644)
 }
 
 func handleCLI(args []string) bool {
