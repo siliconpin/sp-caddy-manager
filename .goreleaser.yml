@@ -1,4 +1,4 @@
-version: 1
+version: 2
 project_name: sp-caddy-manager
 
 builds:
@@ -15,11 +15,12 @@ builds:
       - -s -w -X main.version={{ .Version }}
 
 archives:
-  - format: binary
+  - formats:
+      - binary
     name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
 
 snapshot:
-  name_template: "v{{ .Version }}-snapshot"
+  version_template: "v{{ .Version }}-snapshot"
 
 changelog:
   use: git
